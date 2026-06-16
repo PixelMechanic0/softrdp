@@ -286,16 +286,14 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
             continue;
         }
 
-        for (int x = span.x0; x <= span.x1; x++) {
-            result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, fill_triangle, &bounds);
-            if (result != SR_OK) {
+        result = pipeline_process_triangle_span(memory, tmem, state, &decoded, span.x0, span.x1, y, fill_triangle, &bounds);
+        if (result != SR_OK) {
 #if SOFTRDP_ENABLE_PERF_LOG
-                QueryPerformanceCounter(&end);
-                state->triangle_ticks += (end.QuadPart - start.QuadPart);
-                state->triangle_count++;
+            QueryPerformanceCounter(&end);
+            state->triangle_ticks += (end.QuadPart - start.QuadPart);
+            state->triangle_count++;
 #endif
-                return result;
-            }
+            return result;
         }
     }
 

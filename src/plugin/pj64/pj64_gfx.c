@@ -523,7 +523,7 @@ void PJ64_CALL ProcessRDPList(void)
         if (PJ64_LOG_ENABLED &&
             (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
              (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)) ||
-             stats.draw_calls_seen != g_last_logged_draws)) {
+             (!SOFTRDP_ENABLE_PERF_LOG && stats.draw_calls_seen != g_last_logged_draws))) {
             pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s commands=%llu draws=%llu",
                               g_process_rdp_calls,
                               result_name(result),

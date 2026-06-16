@@ -25,6 +25,14 @@ sr_result pipeline_process_triangle_pixel(sr_memory *memory,
                                           bool fill_mode,
                                           const rdp_tile_bounds *bounds);
 
+sr_result pipeline_process_triangle_span(sr_memory *memory,
+                                         tmem_state *tmem,
+                                         const rdp_state *state,
+                                         const raster_decoded_triangle *decoded,
+                                         int x0, int x1, int y,
+                                         bool fill_mode,
+                                         const rdp_tile_bounds *bounds);
+
 sr_result pipeline_process_rect_pixel(sr_memory *memory,
                                       tmem_state *tmem,
                                       const rdp_state *state,

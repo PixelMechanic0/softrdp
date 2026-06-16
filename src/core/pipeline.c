@@ -115,6 +115,11 @@ static uint16_t depth_interpolated_value(const raster_decoded_triangle *decoded,
     return value <= 0 ? 0 : (value >= 0xffff0000ll ? 0xffffu : (uint16_t)((uint64_t)value >> 16));
 }
 
+static uint16_t depth_fixed_to_u16(int64_t value)
+{
+    return value <= 0 ? 0 : (value >= 0xffff0000ll ? 0xffffu : (uint16_t)((uint64_t)value >> 16));
+}
+
 static sr_result depth_test_and_update(sr_memory *memory,
                                        const rdp_state *state,
                                        const raster_decoded_triangle *decoded,
@@ -150,6 +155,69 @@ static sr_result depth_test_and_update(sr_memory *memory,
     }
 
     return SR_OK;
+}
+
+typedef struct triangle_span_state {
+    int64_t depth_fixed;
+    int32_t s_fixed;
+    int32_t t_fixed;
+    int32_t w_fixed;
+    raster_shade_setup shade;
+} triangle_span_state;
+
+static void triangle_span_state_init(const raster_decoded_triangle *decoded,
+                                     const rdp_state *state,
+                                     int x,
+                                     int y,
+                                     int64_t dx_fixed,
+                                     int64_t dy_fixed,
+                                     triangle_span_state *span)
+{
+    memset(span, 0, sizeof(*span));
+
+    if (decoded->has_depth) {
+        span->depth_fixed = (int64_t)decoded->depth.z +
+                            ((int64_t)decoded->depth.dzdx * dx_fixed +
+                             (int64_t)decoded->depth.dzdy * dy_fixed) / 65536;
+    }
+
+    if (decoded->has_texture && state && state->combiner_needs_texel0) {
+        span->s_fixed = texture_interpolated_value(decoded->texture.s, decoded->texture.dsdx, decoded->texture.dsdy, dx_fixed, dy_fixed);
+        span->t_fixed = texture_interpolated_value(decoded->texture.t, decoded->texture.dtdx, decoded->texture.dtdy, dx_fixed, dy_fixed);
+        if (state->other_modes.perspective) {
+            span->w_fixed = texture_interpolated_value(decoded->texture.w, decoded->texture.dwdx, decoded->texture.dwdy, dx_fixed, dy_fixed);
+        }
+    }
+
+    if (decoded->has_shade) {
+        span->shade = decoded->shade;
+        span->shade.r = interpolate_attribute(decoded, span->shade.r, span->shade.drdx, span->shade.drde, span->shade.drdy, x, y);
+        span->shade.g = interpolate_attribute(decoded, span->shade.g, span->shade.dgdx, span->shade.dgde, span->shade.dgdy, x, y);
+        span->shade.b = interpolate_attribute(decoded, span->shade.b, span->shade.dbdx, span->shade.dbde, span->shade.dbdy, x, y);
+        span->shade.a = interpolate_attribute(decoded, span->shade.a, span->shade.dadx, span->shade.dade, span->shade.dady, x, y);
+    }
+}
+
+static void triangle_span_state_step(const raster_decoded_triangle *decoded,
+                                     const rdp_state *state,
+                                     triangle_span_state *span)
+{
+    if (decoded->has_depth) {
+        span->depth_fixed += decoded->depth.dzdx;
+    }
+    if (decoded->has_texture && state && state->combiner_needs_texel0) {
+        span->s_fixed += decoded->texture.dsdx;
+        span->t_fixed += decoded->texture.dtdx;
+        if (state->other_modes.perspective) {
+            span->w_fixed += decoded->texture.dwdx;
+        }
+    }
+    if (decoded->has_shade) {
+        span->shade.r += decoded->shade.drdx & ~0x1f;
+        span->shade.g += decoded->shade.dgdx & ~0x1f;
+        span->shade.b += decoded->shade.dbdx & ~0x1f;
+        span->shade.a += decoded->shade.dadx & ~0x1f;
+    }
 }
 
 static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
@@ -236,6 +304,121 @@ sr_result pipeline_process_triangle_pixel(sr_memory *memory,
             return framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y, color);
         }
     }
+    return SR_OK;
+}
+
+/*
+ * Span processing is the intended long-term raster pipeline shape, not a
+ * one-off optimization. Rasterization should produce spans; pipeline stages
+ * should consume spans with incremental shade/texture/depth state. As coverage,
+ * blending, LOD, fog, and cycle modes grow, split this into explicit span setup,
+ * texture, combine, depth/blend, and framebuffer stages rather than returning
+ * to per-pixel full interpolation.
+ */
+sr_result pipeline_process_triangle_span(sr_memory *memory,
+                                         tmem_state *tmem,
+                                         const rdp_state *state,
+                                         const raster_decoded_triangle *decoded,
+                                         int x0, int x1, int y,
+                                         bool fill_mode,
+                                         const rdp_tile_bounds *bounds)
+{
+    if (x1 < x0) {
+        return SR_OK;
+    }
+
+    int64_t dx_fixed = ((int64_t)x0 << 16) + 0x8000 - (int64_t)decoded->position.xh;
+    int64_t dy_fixed = (((int64_t)y << 2) + 2 - (int64_t)decoded->position.yh) << 14;
+    triangle_span_state span;
+    triangle_span_state_init(decoded, state, x0, y, dx_fixed, dy_fixed, &span);
+
+    for (int x = x0; x <= x1; x++) {
+        bool visible = true;
+        if (decoded->has_depth && state->depth_image_address != 0) {
+            uint16_t old_depth = 0xffffu;
+            const uint16_t new_depth = depth_fixed_to_u16(span.depth_fixed);
+            const uint32_t pixel = (uint32_t)y * state->color_image.width + (uint32_t)x;
+            const uint32_t addr = state->depth_image_address + pixel * 2u;
+
+            if ((state->other_modes.z_compare || state->other_modes.z_update) &&
+                !sr_memory_read_be16(memory, addr, &old_depth)) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
+            if (state->other_modes.z_compare && new_depth > old_depth) {
+                visible = false;
+            } else if (state->other_modes.z_update &&
+                       !sr_memory_write_be16(memory, addr, new_depth)) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
+        }
+
+        if (visible) {
+            if (fill_mode) {
+                sr_result result = framebuffer_write_fill_pixel(memory, state, (uint32_t)x, (uint32_t)y);
+                if (result != SR_OK) {
+                    return result;
+                }
+            } else if (decoded->has_texture) {
+                const bool needs_texel0 = state && state->combiner_needs_texel0;
+                bool wrote_color = false;
+                if (needs_texel0) {
+                    uint16_t texel;
+                    int32_t s_fixed = span.s_fixed;
+                    int32_t t_fixed = span.t_fixed;
+                    if (state->other_modes.perspective) {
+                        s_fixed = perspective_divide_coord(s_fixed, span.w_fixed);
+                        t_fixed = perspective_divide_coord(t_fixed, span.w_fixed);
+                    }
+
+                    if (tmem_sample_rgba5551(tmem, state, decoded->position.tile & 7u,
+                                             texture_coord_to_texel(s_fixed),
+                                             texture_coord_to_texel(t_fixed),
+                                             bounds, &texel)) {
+                        rdp_color texel0 = pipeline_rgba5551_to_color(texel);
+                        rdp_color color;
+                        if (decoded->has_shade && state->combiner_needs_shade) {
+                            const rdp_color shade = shade_base_color(&span.shade);
+                            color = modulate_color(texel0, shade);
+                        } else {
+                            color = pipeline_shade_pixel(state, &(pipeline_inputs){
+                                .texel0 = texel0,
+                                .primitive = state->primitive_color
+                            }).color;
+                        }
+                        sr_result result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y, color);
+                        if (result != SR_OK) {
+                            return result;
+                        }
+                        wrote_color = true;
+                    }
+                } else {
+                    sr_result result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y,
+                                                               state ? state->primitive_color : (rdp_color){0, 0, 0, 255});
+                    if (result != SR_OK) {
+                        return result;
+                    }
+                    wrote_color = true;
+                }
+
+                if (!wrote_color && decoded->has_shade) {
+                    sr_result result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y,
+                                                               shade_base_color(&span.shade));
+                    if (result != SR_OK) {
+                        return result;
+                    }
+                }
+            } else if (decoded->has_shade) {
+                sr_result result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y,
+                                                           shade_base_color(&span.shade));
+                if (result != SR_OK) {
+                    return result;
+                }
+            }
+        }
+
+        triangle_span_state_step(decoded, state, &span);
+    }
+
     return SR_OK;
 }
 
