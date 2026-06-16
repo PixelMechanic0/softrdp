@@ -21,7 +21,7 @@ typedef struct tmem_state {
 } tmem_state;
 
 void tmem_init(tmem_state *tmem);
-sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_command *cmd);
+sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd);
 
 static inline uint32_t shift_tile_coord(uint32_t coord, uint8_t shift)
 {

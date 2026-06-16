@@ -7,6 +7,16 @@
 #define SOFTRDP_ENABLE_LOG 0
 #endif
 
+#ifndef SOFTRDP_ENABLE_PERF_LOG
+#define SOFTRDP_ENABLE_PERF_LOG 0
+#endif
+
+/* Auto-enable main logging if performance logging is requested */
+#if SOFTRDP_ENABLE_PERF_LOG && !SOFTRDP_ENABLE_LOG
+#undef SOFTRDP_ENABLE_LOG
+#define SOFTRDP_ENABLE_LOG 1
+#endif
+
 #if SOFTRDP_ENABLE_LOG
 #define PJ64_LOG_ENABLED 1
 void pj64_log_open(void);

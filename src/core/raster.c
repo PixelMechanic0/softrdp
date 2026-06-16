@@ -5,6 +5,11 @@
 
 #include <stdint.h>
 
+#if SOFTRDP_ENABLE_PERF_LOG
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 static int32_t sign_extend(uint32_t value, unsigned bits)
 {
     const uint32_t mask = 1u << (bits - 1u);
@@ -262,6 +267,11 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         return SR_OK;
     }
 
+#if SOFTRDP_ENABLE_PERF_LOG
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+#endif
+
     rdp_tile_bounds bounds = {0};
     if (decoded.has_texture) {
         pipeline_resolve_tile_bounds(state, tmem, decoded.position.tile & 7u, &bounds);
@@ -279,10 +289,21 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         for (int x = span.x0; x <= span.x1; x++) {
             result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, fill_triangle, &bounds);
             if (result != SR_OK) {
+#if SOFTRDP_ENABLE_PERF_LOG
+                QueryPerformanceCounter(&end);
+                state->triangle_ticks += (end.QuadPart - start.QuadPart);
+                state->triangle_count++;
+#endif
                 return result;
             }
         }
     }
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    QueryPerformanceCounter(&end);
+    state->triangle_ticks += (end.QuadPart - start.QuadPart);
+    state->triangle_count++;
+#endif
 
     return SR_OK;
 }
@@ -332,7 +353,7 @@ static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, r
     return SR_OK;
 }
 
-sr_result raster_submit_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+static sr_result raster_submit_rectangle_internal(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
 {
     raster_rect rect;
 
@@ -359,4 +380,22 @@ sr_result raster_submit_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state
     }
 
     return framebuffer_fill_rect(memory, state, rect.x0, rect.y0, rect.x1, rect.y1);
+}
+
+sr_result raster_submit_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+{
+#if SOFTRDP_ENABLE_PERF_LOG
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+#endif
+
+    sr_result result = raster_submit_rectangle_internal(memory, tmem, state, cmd);
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    QueryPerformanceCounter(&end);
+    state->rect_ticks += (end.QuadPart - start.QuadPart);
+    state->rect_count++;
+#endif
+
+    return result;
 }

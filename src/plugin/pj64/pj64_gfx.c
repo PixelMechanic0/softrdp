@@ -31,6 +31,12 @@ static uint32_t g_uploaded_frames;
 static uint64_t g_last_logged_commands;
 static uint64_t g_last_logged_draws;
 
+#if SOFTRDP_ENABLE_PERF_LOG
+static sr_debug_stats g_perf_baseline_stats;
+static uint32_t g_perf_frame_count;
+static double g_perf_draw_total_ms;
+#endif
+
 static uint32_t *reg32(DWORD *reg)
 {
     return (uint32_t *)(void *)reg;
@@ -362,11 +368,68 @@ static bool start_runtime(void)
 
     g_runtime_started = true;
     pj64_log_printf("start_runtime: ready");
+#if SOFTRDP_ENABLE_PERF_LOG
+    g_perf_baseline_stats = sr_get_debug_stats(g_context);
+    g_perf_frame_count = 0;
+    g_perf_draw_total_ms = 0.0;
+#endif
     return true;
 }
 
+#if SOFTRDP_ENABLE_PERF_LOG
+static void log_perf_summary(const char *header)
+{
+    if (!g_context || g_perf_frame_count == 0) {
+        return;
+    }
+
+    sr_debug_stats current_stats = sr_get_debug_stats(g_context);
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    double freq_d = (double)freq.QuadPart;
+
+    uint64_t delta_rdp_ticks = current_stats.process_rdp_ticks - g_perf_baseline_stats.process_rdp_ticks;
+    uint64_t delta_tri_ticks = current_stats.triangle_ticks - g_perf_baseline_stats.triangle_ticks;
+    uint64_t delta_tri_count = current_stats.triangle_count - g_perf_baseline_stats.triangle_count;
+    uint64_t delta_rect_ticks = current_stats.rect_ticks - g_perf_baseline_stats.rect_ticks;
+    uint64_t delta_rect_count = current_stats.rect_count - g_perf_baseline_stats.rect_count;
+    uint64_t delta_tex_ticks = current_stats.tex_load_ticks - g_perf_baseline_stats.tex_load_ticks;
+    uint64_t delta_tex_count = current_stats.tex_load_count - g_perf_baseline_stats.tex_load_count;
+    uint64_t delta_vi_ticks = current_stats.vi_ticks - g_perf_baseline_stats.vi_ticks;
+    uint64_t delta_commands = current_stats.commands_seen - g_perf_baseline_stats.commands_seen;
+    uint64_t delta_draws = current_stats.draw_calls_seen - g_perf_baseline_stats.draw_calls_seen;
+
+    double rdp_ms = (double)delta_rdp_ticks * 1000.0 / freq_d;
+    double tri_ms = (double)delta_tri_ticks * 1000.0 / freq_d;
+    double rect_ms = (double)delta_rect_ticks * 1000.0 / freq_d;
+    double tex_ms = (double)delta_tex_ticks * 1000.0 / freq_d;
+    double vi_ms = (double)delta_vi_ticks * 1000.0 / freq_d;
+
+    pj64_log_printf("PERF SUMMARY - %s (over %u frames):", header, g_perf_frame_count);
+    pj64_log_printf("  RDP processing:       %8.3f ms (avg %7.3f ms/frame)", rdp_ms, rdp_ms / g_perf_frame_count);
+    pj64_log_printf("    Included timers; these overlap with RDP processing total:");
+    pj64_log_printf("    - Triangles:  %5llu calls, %8.3f ms (avg %7.3f ms/tri)",
+                      (unsigned long long)delta_tri_count, tri_ms, delta_tri_count ? tri_ms / delta_tri_count : 0.0);
+    pj64_log_printf("    - Rectangles: %5llu calls, %8.3f ms (avg %7.3f ms/rect)",
+                      (unsigned long long)delta_rect_count, rect_ms, delta_rect_count ? rect_ms / delta_rect_count : 0.0);
+    pj64_log_printf("    - Tex Loads:  %5llu calls, %8.3f ms (avg %7.3f ms/load)",
+                      (unsigned long long)delta_tex_count, tex_ms, delta_tex_count ? tex_ms / delta_tex_count : 0.0);
+    pj64_log_printf("  Total VI Scanout:     %8.3f ms (avg %7.3f ms/frame)", vi_ms, vi_ms / g_perf_frame_count);
+    pj64_log_printf("  Total Present/Draw:   %8.3f ms (avg %7.3f ms/frame)", g_perf_draw_total_ms, g_perf_draw_total_ms / g_perf_frame_count);
+    pj64_log_printf("  Total Commands: %llu, Draw Calls: %llu",
+                      (unsigned long long)delta_commands, (unsigned long long)delta_draws);
+
+    g_perf_baseline_stats = current_stats;
+    g_perf_frame_count = 0;
+    g_perf_draw_total_ms = 0.0;
+}
+#endif
+
 static void stop_runtime(void)
 {
+#if SOFTRDP_ENABLE_PERF_LOG
+    log_perf_summary("Shutdown");
+#endif
     if (g_runtime_started || pj64_log_is_open()) {
         pj64_log_printf("stop_runtime rdp_calls=%u update_calls=%u uploaded_frames=%u",
                           g_process_rdp_calls,
@@ -483,7 +546,16 @@ void PJ64_CALL ProcessRDPList(void)
 
 void PJ64_CALL DrawScreen(void)
 {
+#if SOFTRDP_ENABLE_PERF_LOG
+    LARGE_INTEGER start, end, freq;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&start);
+#endif
     sr_present_draw(&g_present);
+#if SOFTRDP_ENABLE_PERF_LOG
+    QueryPerformanceCounter(&end);
+    g_perf_draw_total_ms += (double)(end.QuadPart - start.QuadPart) * 1000.0 / (double)freq.QuadPart;
+#endif
 }
 
 void PJ64_CALL ReadScreen(void **dest, long *width, long *height)
@@ -537,6 +609,13 @@ void PJ64_CALL UpdateScreen(void)
     } else {
         uploaded = upload_raw_cfb(target);
     }
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    g_perf_frame_count++;
+    if (g_perf_frame_count >= 60) {
+        log_perf_summary("Periodic");
+    }
+#endif
 
     if (uploaded) {
         g_uploaded_frames++;

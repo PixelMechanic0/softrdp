@@ -121,6 +121,15 @@ typedef struct rdp_state {
     rdp_tile tiles[8];
     uint64_t commands_seen;
     uint64_t draw_calls_seen;
+
+    uint64_t triangle_count;
+    uint64_t triangle_ticks;
+    uint64_t rect_count;
+    uint64_t rect_ticks;
+    uint64_t tex_load_count;
+    uint64_t tex_load_ticks;
+    uint64_t vi_ticks;
+    uint64_t process_rdp_ticks;
 } rdp_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)

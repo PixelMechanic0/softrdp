@@ -10,7 +10,11 @@ static FILE *g_log;
 static unsigned g_log_lines;
 static bool g_log_truncated;
 
+#if SOFTRDP_ENABLE_PERF_LOG
+#define PJ64_LOG_MAX_LINES 100000u
+#else
 #define PJ64_LOG_MAX_LINES 1024u
+#endif
 
 void pj64_log_open(void)
 {

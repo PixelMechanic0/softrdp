@@ -5,12 +5,17 @@
 
 #include <string.h>
 
+#if SOFTRDP_ENABLE_PERF_LOG
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 void tmem_init(tmem_state *tmem)
 {
     memset(tmem, 0, sizeof(*tmem));
 }
 
-sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_command *cmd)
+static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd)
 {
     if (!tmem || !memory || !state || !cmd) {
         return SR_ERROR_INVALID_ARGUMENT;
@@ -68,4 +73,24 @@ sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *s
     tmem->tile_th[tile_index] = (uint16_t)th;
     tmem->loads_seen++;
     return SR_OK;
+}
+
+sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd)
+{
+#if SOFTRDP_ENABLE_PERF_LOG
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+#endif
+
+    sr_result result = tmem_load_tile_internal(tmem, memory, state, cmd);
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    QueryPerformanceCounter(&end);
+    if (state) {
+        state->tex_load_ticks += (end.QuadPart - start.QuadPart);
+        state->tex_load_count++;
+    }
+#endif
+
+    return result;
 }

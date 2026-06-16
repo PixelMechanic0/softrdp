@@ -15,6 +15,15 @@ typedef struct sr_debug_stats {
     uint32_t last_command_address;
     uint32_t last_command_id;
     sr_result last_result;
+
+    uint64_t triangle_count;
+    uint64_t triangle_ticks;
+    uint64_t rect_count;
+    uint64_t rect_ticks;
+    uint64_t tex_load_count;
+    uint64_t tex_load_ticks;
+    uint64_t vi_ticks;
+    uint64_t process_rdp_ticks;
 } sr_debug_stats;
 
 sr_context *sr_create(const sr_host_interface *host);

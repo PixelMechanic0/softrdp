@@ -9,6 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if SOFTRDP_ENABLE_PERF_LOG
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 struct sr_context {
     sr_host_interface host;
     sr_memory memory;
@@ -125,15 +130,11 @@ void sr_set_host(sr_context *ctx, const sr_host_interface *host)
     sr_memory_init(&ctx->memory, &ctx->host);
 }
 
-sr_result sr_process_rdp_list(sr_context *ctx)
+static sr_result sr_process_rdp_list_internal(sr_context *ctx)
 {
     uint32_t current;
     uint32_t end;
     bool xbus_dma;
-
-    if (!ctx) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
 
     current = read_reg(ctx->host.dp_regs, SR_DP_CURRENT) & ~7u;
     end = read_reg(ctx->host.dp_regs, SR_DP_END) & ~7u;
@@ -202,6 +203,27 @@ sr_result sr_process_rdp_list(sr_context *ctx)
     return SR_OK;
 }
 
+sr_result sr_process_rdp_list(sr_context *ctx)
+{
+    if (!ctx) {
+        return SR_ERROR_INVALID_ARGUMENT;
+    }
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+#endif
+
+    sr_result result = sr_process_rdp_list_internal(ctx);
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    QueryPerformanceCounter(&end);
+    ctx->rdp.process_rdp_ticks += (end.QuadPart - start.QuadPart);
+#endif
+
+    return result;
+}
+
 sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
 {
     if (!ctx) {
@@ -209,7 +231,20 @@ sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
     }
 
     vi_latch_registers(&ctx->vi, &ctx->host);
-    return vi_scanout(&ctx->vi, &ctx->memory, out);
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    LARGE_INTEGER start, end;
+    QueryPerformanceCounter(&start);
+#endif
+
+    sr_result result = vi_scanout(&ctx->vi, &ctx->memory, out);
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    QueryPerformanceCounter(&end);
+    ctx->rdp.vi_ticks += (end.QuadPart - start.QuadPart);
+#endif
+
+    return result;
 }
 
 sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
@@ -220,6 +255,16 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
         stats = ctx->debug;
         stats.commands_seen = ctx->rdp.commands_seen;
         stats.draw_calls_seen = ctx->rdp.draw_calls_seen;
+#if SOFTRDP_ENABLE_PERF_LOG
+        stats.triangle_count = ctx->rdp.triangle_count;
+        stats.triangle_ticks = ctx->rdp.triangle_ticks;
+        stats.rect_count = ctx->rdp.rect_count;
+        stats.rect_ticks = ctx->rdp.rect_ticks;
+        stats.tex_load_count = ctx->rdp.tex_load_count;
+        stats.tex_load_ticks = ctx->rdp.tex_load_ticks;
+        stats.vi_ticks = ctx->rdp.vi_ticks;
+        stats.process_rdp_ticks = ctx->rdp.process_rdp_ticks;
+#endif
     }
 
     return stats;
