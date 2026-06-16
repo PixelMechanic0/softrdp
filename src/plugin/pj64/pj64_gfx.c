@@ -432,6 +432,65 @@ static bool start_runtime(void)
 }
 
 #if SOFTRDP_ENABLE_PERF_LOG
+static const char *texture_format_name(uint32_t format)
+{
+    switch (format) {
+    case 0: return "RGBA";
+    case 1: return "YUV";
+    case 2: return "CI";
+    case 3: return "IA";
+    case 4: return "I";
+    default: return "?";
+    }
+}
+
+static const char *texture_size_name(uint32_t size)
+{
+    switch (size) {
+    case 0: return "4b";
+    case 1: return "8b";
+    case 2: return "16b";
+    case 3: return "32b";
+    default: return "?";
+    }
+}
+
+static void log_format_size_delta(const char *label,
+                                  const uint64_t current[5][4],
+                                  const uint64_t baseline[5][4])
+{
+    char line[512];
+    size_t used = 0;
+    bool any = false;
+
+    used += (size_t)snprintf(line + used, sizeof(line) - used, "      %s:", label);
+    for (uint32_t format = 0; format < 5; format++) {
+        for (uint32_t size = 0; size < 4; size++) {
+            const uint64_t delta = current[format][size] - baseline[format][size];
+            if (delta == 0) {
+                continue;
+            }
+            any = true;
+            if (used + 64u >= sizeof(line)) {
+                line[sizeof(line) - 1u] = '\0';
+                pj64_log_printf("%s", line);
+                used = 0;
+                used += (size_t)snprintf(line + used, sizeof(line) - used, "      %s:", label);
+            }
+            used += (size_t)snprintf(line + used,
+                                     sizeof(line) - used,
+                                     " %s/%s=%llu",
+                                     texture_format_name(format),
+                                     texture_size_name(size),
+                                     (unsigned long long)delta);
+        }
+    }
+
+    if (any) {
+        pj64_log_printf("%s", line);
+    }
+}
+
 static void log_perf_summary(const char *header)
 {
     if (!g_context || g_perf_frame_count == 0) {
@@ -454,9 +513,18 @@ static void log_perf_summary(const char *header)
     uint64_t delta_sample_hits = current_stats.texture_sample_hits - g_perf_baseline_stats.texture_sample_hits;
     uint64_t delta_sample_misses = current_stats.texture_sample_misses - g_perf_baseline_stats.texture_sample_misses;
     uint64_t delta_sample_fallbacks = current_stats.texture_sample_shade_fallbacks - g_perf_baseline_stats.texture_sample_shade_fallbacks;
+    uint64_t delta_sample_tlut = current_stats.texture_sample_tlut_attempts - g_perf_baseline_stats.texture_sample_tlut_attempts;
+    uint64_t delta_sample_bilerp = current_stats.texture_sample_bilerp_attempts - g_perf_baseline_stats.texture_sample_bilerp_attempts;
+    uint64_t delta_sample_quad = current_stats.texture_sample_quad_attempts - g_perf_baseline_stats.texture_sample_quad_attempts;
+    uint64_t delta_sample_mid = current_stats.texture_sample_mid_texel_attempts - g_perf_baseline_stats.texture_sample_mid_texel_attempts;
+    uint64_t delta_sample_perspective = current_stats.texture_sample_perspective_attempts - g_perf_baseline_stats.texture_sample_perspective_attempts;
+    uint64_t delta_sample_texelshade = current_stats.texture_sample_texel0_shade_attempts - g_perf_baseline_stats.texture_sample_texel0_shade_attempts;
     uint64_t delta_rect_sample_attempts = current_stats.rect_texture_sample_attempts - g_perf_baseline_stats.rect_texture_sample_attempts;
     uint64_t delta_rect_sample_hits = current_stats.rect_texture_sample_hits - g_perf_baseline_stats.rect_texture_sample_hits;
     uint64_t delta_rect_sample_misses = current_stats.rect_texture_sample_misses - g_perf_baseline_stats.rect_texture_sample_misses;
+    uint64_t delta_load_blocks = current_stats.tex_load_block_count - g_perf_baseline_stats.tex_load_block_count;
+    uint64_t delta_load_tiles = current_stats.tex_load_tile_count - g_perf_baseline_stats.tex_load_tile_count;
+    uint64_t delta_load_tluts = current_stats.tex_load_tlut_count - g_perf_baseline_stats.tex_load_tlut_count;
     uint64_t delta_vi_ticks = current_stats.vi_ticks - g_perf_baseline_stats.vi_ticks;
     uint64_t delta_commands = current_stats.commands_seen - g_perf_baseline_stats.commands_seen;
     uint64_t delta_draws = current_stats.draw_calls_seen - g_perf_baseline_stats.draw_calls_seen;
@@ -476,6 +544,13 @@ static void log_perf_summary(const char *header)
                       (unsigned long long)delta_rect_count, rect_ms, delta_rect_count ? rect_ms / delta_rect_count : 0.0);
     pj64_log_printf("    - Tex Loads:  %5llu calls, %8.3f ms (avg %7.3f ms/load)",
                       (unsigned long long)delta_tex_count, tex_ms, delta_tex_count ? tex_ms / delta_tex_count : 0.0);
+    pj64_log_printf("      load cmds: block=%llu tile=%llu tlut=%llu",
+                      (unsigned long long)delta_load_blocks,
+                      (unsigned long long)delta_load_tiles,
+                      (unsigned long long)delta_load_tluts);
+    log_format_size_delta("load formats",
+                          current_stats.tex_load_by_format_size,
+                          g_perf_baseline_stats.tex_load_by_format_size);
     pj64_log_printf("    - Tex Samples: tri attempts=%llu hits=%llu misses=%llu shade_fallbacks=%llu rect attempts=%llu hits=%llu misses=%llu",
                       (unsigned long long)delta_sample_attempts,
                       (unsigned long long)delta_sample_hits,
@@ -484,6 +559,32 @@ static void log_perf_summary(const char *header)
                       (unsigned long long)delta_rect_sample_attempts,
                       (unsigned long long)delta_rect_sample_hits,
                       (unsigned long long)delta_rect_sample_misses);
+    pj64_log_printf("      sample modes: tlut=%llu bilerp0=%llu sample_quad=%llu mid_texel=%llu perspective=%llu texel0*shade=%llu",
+                      (unsigned long long)delta_sample_tlut,
+                      (unsigned long long)delta_sample_bilerp,
+                      (unsigned long long)delta_sample_quad,
+                      (unsigned long long)delta_sample_mid,
+                      (unsigned long long)delta_sample_perspective,
+                      (unsigned long long)delta_sample_texelshade);
+    log_format_size_delta("sample attempts",
+                          current_stats.texture_sample_by_format_size,
+                          g_perf_baseline_stats.texture_sample_by_format_size);
+    log_format_size_delta("sample hits",
+                          current_stats.texture_sample_hits_by_format_size,
+                          g_perf_baseline_stats.texture_sample_hits_by_format_size);
+    pj64_log_printf("      sample-range s=%u..%u t=%u..%u color_xor=%08x",
+                      current_stats.texture_sample_min_s,
+                      current_stats.texture_sample_max_s,
+                      current_stats.texture_sample_min_t,
+                      current_stats.texture_sample_max_t,
+                      current_stats.texture_sample_color_xor);
+    pj64_log_printf("      sample-fixed s=%d..%d t=%d..%d w=%d..%d",
+                      current_stats.texture_sample_min_s_fixed,
+                      current_stats.texture_sample_max_s_fixed,
+                      current_stats.texture_sample_min_t_fixed,
+                      current_stats.texture_sample_max_t_fixed,
+                      current_stats.texture_sample_min_w_fixed,
+                      current_stats.texture_sample_max_w_fixed);
     pj64_log_printf("  Total VI Scanout:     %8.3f ms (avg %7.3f ms/frame)", vi_ms, vi_ms / g_perf_frame_count);
     pj64_log_printf("  Total Present/Draw:   %8.3f ms (avg %7.3f ms/frame)", g_perf_draw_total_ms, g_perf_draw_total_ms / g_perf_frame_count);
     pj64_log_printf("  Total Commands: %llu, Draw Calls: %llu",
@@ -606,6 +707,8 @@ void PJ64_CALL ProcessRDPList(void)
                               (unsigned long long)stats.commands_seen,
                               (unsigned long long)stats.draw_calls_seen);
             if (result != SR_OK) {
+                log_texture_debug(&stats);
+            } else if (command_has_texture_debug(stats.last_command_id)) {
                 log_texture_debug(&stats);
             }
             g_last_logged_commands = stats.commands_seen;

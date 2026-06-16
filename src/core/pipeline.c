@@ -105,7 +105,7 @@ static int32_t perspective_divide_coord(int32_t coord, int32_t w)
 
 static uint32_t texture_coord_to_texel(int32_t value)
 {
-    return value <= 0 ? 0 : (uint32_t)value >> 16;
+    return value <= 0 ? 0 : (uint32_t)value >> 5;
 }
 
 static uint16_t depth_interpolated_value(const raster_decoded_triangle *decoded, int64_t dx_fixed, int64_t dy_fixed)
@@ -118,6 +118,103 @@ static uint16_t depth_interpolated_value(const raster_decoded_triangle *decoded,
 static uint16_t depth_fixed_to_u16(int64_t value)
 {
     return value <= 0 ? 0 : (value >= 0xffff0000ll ? 0xffffu : (uint16_t)((uint64_t)value >> 16));
+}
+
+static void record_texture_sample_coord(rdp_state *state, uint32_t s, uint32_t t)
+{
+    if (!state) {
+        return;
+    }
+
+    if (state->texture_sample_attempts == 0) {
+        state->texture_sample_min_s = s;
+        state->texture_sample_max_s = s;
+        state->texture_sample_min_t = t;
+        state->texture_sample_max_t = t;
+    } else {
+        if (s < state->texture_sample_min_s) state->texture_sample_min_s = s;
+        if (s > state->texture_sample_max_s) state->texture_sample_max_s = s;
+        if (t < state->texture_sample_min_t) state->texture_sample_min_t = t;
+        if (t > state->texture_sample_max_t) state->texture_sample_max_t = t;
+    }
+}
+
+static void record_texture_sample_fixed(rdp_state *state, int32_t s, int32_t t, int32_t w)
+{
+    if (!state) {
+        return;
+    }
+
+    if (state->texture_sample_attempts == 0) {
+        state->texture_sample_min_s_fixed = s;
+        state->texture_sample_max_s_fixed = s;
+        state->texture_sample_min_t_fixed = t;
+        state->texture_sample_max_t_fixed = t;
+        state->texture_sample_min_w_fixed = w;
+        state->texture_sample_max_w_fixed = w;
+    } else {
+        if (s < state->texture_sample_min_s_fixed) state->texture_sample_min_s_fixed = s;
+        if (s > state->texture_sample_max_s_fixed) state->texture_sample_max_s_fixed = s;
+        if (t < state->texture_sample_min_t_fixed) state->texture_sample_min_t_fixed = t;
+        if (t > state->texture_sample_max_t_fixed) state->texture_sample_max_t_fixed = t;
+        if (w < state->texture_sample_min_w_fixed) state->texture_sample_min_w_fixed = w;
+        if (w > state->texture_sample_max_w_fixed) state->texture_sample_max_w_fixed = w;
+    }
+}
+
+static void record_texture_sample_color(rdp_state *state, rdp_color color)
+{
+    if (!state) {
+        return;
+    }
+
+    const uint32_t packed = ((uint32_t)color.r << 24) |
+                            ((uint32_t)color.g << 16) |
+                            ((uint32_t)color.b << 8) |
+                            (uint32_t)color.a;
+    state->texture_sample_color_xor ^= packed;
+}
+
+static void record_texture_sample_attempt(rdp_state *state, const rdp_tile *tile)
+{
+    if (!state || !tile) {
+        return;
+    }
+
+    state->texture_sample_attempts++;
+    if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
+        state->texture_sample_by_format_size[tile->format][tile->size]++;
+    }
+    if (state->other_modes.tlut_enable) {
+        state->texture_sample_tlut_attempts++;
+    }
+    if (state->other_modes.bilerp0) {
+        state->texture_sample_bilerp_attempts++;
+    }
+    if (state->other_modes.sample_quad) {
+        state->texture_sample_quad_attempts++;
+    }
+    if (state->other_modes.mid_texel) {
+        state->texture_sample_mid_texel_attempts++;
+    }
+    if (state->other_modes.perspective) {
+        state->texture_sample_perspective_attempts++;
+    }
+    if (state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE) {
+        state->texture_sample_texel0_shade_attempts++;
+    }
+}
+
+static void record_texture_sample_hit(rdp_state *state, const rdp_tile *tile)
+{
+    if (!state || !tile) {
+        return;
+    }
+
+    state->texture_sample_hits++;
+    if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
+        state->texture_sample_hits_by_format_size[tile->format][tile->size]++;
+    }
 }
 
 static sr_result depth_test_and_update(sr_memory *memory,
@@ -235,9 +332,10 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
         if (needs_texel0) {
             int32_t s_fixed = texture_interpolated_value(decoded->texture.s, decoded->texture.dsdx, decoded->texture.dsdy, dx_fixed, dy_fixed);
             int32_t t_fixed = texture_interpolated_value(decoded->texture.t, decoded->texture.dtdx, decoded->texture.dtdy, dx_fixed, dy_fixed);
+            int32_t w_fixed = 0;
 
             if (state->other_modes.perspective) {
-                const int32_t w_fixed = texture_interpolated_value(decoded->texture.w, decoded->texture.dwdx, decoded->texture.dwdy, dx_fixed, dy_fixed);
+                w_fixed = texture_interpolated_value(decoded->texture.w, decoded->texture.dwdx, decoded->texture.dwdy, dx_fixed, dy_fixed);
                 s_fixed = perspective_divide_coord(s_fixed, w_fixed);
                 t_fixed = perspective_divide_coord(t_fixed, w_fixed);
             }
@@ -246,9 +344,12 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
             const uint32_t t = texture_coord_to_texel(t_fixed);
 
             rdp_color texel0;
-            state->texture_sample_attempts++;
-            if (tmem_sample_color(tmem, state, decoded->position.tile & 7u, s, t, bounds, &texel0)) {
-                state->texture_sample_hits++;
+            record_texture_sample_fixed(state, s_fixed, t_fixed, w_fixed);
+            record_texture_sample_coord(state, s, t);
+            record_texture_sample_attempt(state, &state->tiles[decoded->position.tile & 7u]);
+            if (tmem_sample_color_fixed5(tmem, state, decoded->position.tile & 7u, s_fixed, t_fixed, bounds, &texel0)) {
+                record_texture_sample_hit(state, &state->tiles[decoded->position.tile & 7u]);
+                record_texture_sample_color(state, texel0);
                 rdp_color shade = {0, 0, 0, 255};
                 
                 const bool needs_shade = state->combiner_needs_shade;
@@ -370,17 +471,22 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
                     int32_t s_fixed = span.s_fixed;
                     int32_t t_fixed = span.t_fixed;
                     if (state->other_modes.perspective) {
+                        const int32_t raw_w_fixed = span.w_fixed;
                         s_fixed = perspective_divide_coord(s_fixed, span.w_fixed);
                         t_fixed = perspective_divide_coord(t_fixed, span.w_fixed);
+                        span.w_fixed = raw_w_fixed;
                     }
 
                     rdp_color texel0;
-                    state->texture_sample_attempts++;
-                    if (tmem_sample_color(tmem, state, decoded->position.tile & 7u,
-                                          texture_coord_to_texel(s_fixed),
-                                          texture_coord_to_texel(t_fixed),
-                                          bounds, &texel0)) {
-                        state->texture_sample_hits++;
+                    record_texture_sample_fixed(state, s_fixed, t_fixed, state->other_modes.perspective ? span.w_fixed : 0);
+                    record_texture_sample_coord(state, texture_coord_to_texel(s_fixed), texture_coord_to_texel(t_fixed));
+                    record_texture_sample_attempt(state, &state->tiles[decoded->position.tile & 7u]);
+                    if (tmem_sample_color_fixed5(tmem, state, decoded->position.tile & 7u,
+                                                 s_fixed,
+                                                 t_fixed,
+                                                 bounds, &texel0)) {
+                        record_texture_sample_hit(state, &state->tiles[decoded->position.tile & 7u]);
+                        record_texture_sample_color(state, texel0);
                         rdp_color color;
                         if (decoded->has_shade && state->combiner_needs_shade) {
                             const rdp_color shade = shade_base_color(&span.shade);

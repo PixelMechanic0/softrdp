@@ -121,68 +121,30 @@ static sr_result load_16bpp_block(tmem_state *tmem, sr_memory *memory, const rdp
 
     const uint32_t start_s = sl >> 2;
     const uint32_t start_t = tl >> 2;
-    uint32_t sample_width = 0u;
-    uint32_t sample_height = 1u;
-
-    uint16_t row_counts[1024] = {0};
-    uint16_t row_offsets[1024] = {0};
-    uint32_t max_row = 0;
-    for (uint32_t x = 0; x < texel_count; x++) {
-        const uint32_t row = dxt ? (((x >> 2) * dxt) >> 11) : 0u;
-        if (row >= 1024u) {
-            return SR_ERROR_UNSUPPORTED;
-        }
-        row_counts[row]++;
-        if (row > max_row) {
-            max_row = row;
-        }
-    }
-
-    for (uint32_t row = 0; row <= max_row; row++) {
-        if (row_counts[row] > sample_width) {
-            sample_width = row_counts[row];
-        }
-    }
-    if (sample_width == 0u) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
-    sample_height = max_row + 1u;
-
-    if (tile->sh > tile->sl || tile->th > tile->tl) {
-        const uint32_t tile_width = (tile->sh >> 2) - (tile->sl >> 2) + 1u;
-        const uint32_t tile_height = (tile->th >> 2) - (tile->tl >> 2) + 1u;
-        if (tile_width > 0u && tile_height > 0u && tile_width * tile_height <= texel_count) {
-            sample_width = tile_width;
-            sample_height = tile_height;
-        }
-    }
-
-    const uint32_t stride = tile->line ? tile->line : tmem_align_row_stride(sample_width * 2u);
+    const uint32_t tmem16_base = tile->tmem >> 1;
+    const uint32_t stride64 = tile->line >> 3;
 
     for (uint32_t x = 0; x < texel_count; x++) {
         uint16_t texel;
-        tmem_texel_address dst;
-        const uint32_t dxt_row = dxt ? (((x >> 2) * dxt) >> 11) : 0u;
+        const uint32_t src_group = x >> 2;
+        const uint32_t dxt_row = dxt ? ((src_group * dxt) >> 11) : 0u;
         const uint32_t src_pixel = start_t * state->texture_image.width + start_s + x;
         const uint32_t src_addr = state->texture_image.address + src_pixel * 2u;
-        const uint32_t dst_row = dxt ? dxt_row : (x / sample_width);
-        const uint32_t dst_col = dxt ? row_offsets[dxt_row]++ : (x - dst_row * sample_width);
-
-        if (dst_row >= sample_height || dst_col >= sample_width) {
-            continue;
-        }
+        const uint32_t dst_word64 = src_group + dxt_row * stride64;
+        const uint32_t dst_lane = (x & 3u) ^ ((dxt_row & 1u) << 1);
+        const uint32_t dst_tmem16 = (tmem16_base + (dst_word64 << 2) + dst_lane) & 0x7ffu;
+        const uint32_t dst_addr = (dst_tmem16 ^ 1u) << 1;
 
         if (!sr_memory_read_be16(memory, src_addr, &texel)) {
             return SR_ERROR_INVALID_ARGUMENT;
         }
 
-        if (!tmem_resolve_rgba16_address_raw(tile, stride, dst_col, dst_row, &dst) ||
-            !tmem_write_be16(tmem, dst.byte, texel)) {
+        if (!tmem_write_be16(tmem, dst_addr, texel)) {
             return SR_ERROR_INVALID_ARGUMENT;
         }
     }
 
-    record_loaded_tile(tmem, tile_index, sample_width, sample_height, stride, 0u, 0u, sample_width - 1u, sample_height - 1u);
+    record_loaded_tile(tmem, tile_index, texel_count, 1u, tile->line, 0u, 0u, texel_count - 1u, 0u);
     return SR_OK;
 }
 
@@ -233,6 +195,25 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rd
 
     const uint32_t tile_index = cmd->decoded.load.tile_index;
     const rdp_tile *tile = &state->tiles[tile_index];
+
+#if SOFTRDP_ENABLE_PERF_LOG
+    switch (cmd->id) {
+    case RDP_CMD_LOAD_BLOCK:
+        state->tex_load_block_count++;
+        break;
+    case RDP_CMD_LOAD_TLUT:
+        state->tex_load_tlut_count++;
+        break;
+    case RDP_CMD_LOAD_TILE:
+        state->tex_load_tile_count++;
+        break;
+    default:
+        break;
+    }
+    if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
+        state->tex_load_by_format_size[tile->format][tile->size]++;
+    }
+#endif
 
     if (!texture_state_supports_load(state, tile)) {
         return SR_ERROR_UNSUPPORTED;

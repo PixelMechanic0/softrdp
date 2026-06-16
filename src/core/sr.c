@@ -89,8 +89,6 @@ static void rdp_state_init(rdp_state *state)
     state->scissor_x1 = 640u << 2;
     state->scissor_y1 = 480u << 2;
     state->other_modes.cycle_type = RDP_CYCLE_1;
-    state->other_modes.bilerp0 = true;
-    state->other_modes.bilerp1 = true;
     state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
     state->combiner_needs_texel0 = true;
     state->combiner_needs_shade = false;
@@ -257,6 +255,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
             finish_rdp_list(ctx, end, true);
             return result;
         }
+        capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
 
         current += (uint32_t)cmd.word_count * 4u;
     }
@@ -328,9 +327,38 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
         stats.texture_sample_hits = ctx->rdp.texture_sample_hits;
         stats.texture_sample_misses = ctx->rdp.texture_sample_misses;
         stats.texture_sample_shade_fallbacks = ctx->rdp.texture_sample_shade_fallbacks;
+        memcpy(stats.texture_sample_by_format_size,
+               ctx->rdp.texture_sample_by_format_size,
+               sizeof(stats.texture_sample_by_format_size));
+        memcpy(stats.texture_sample_hits_by_format_size,
+               ctx->rdp.texture_sample_hits_by_format_size,
+               sizeof(stats.texture_sample_hits_by_format_size));
+        stats.texture_sample_tlut_attempts = ctx->rdp.texture_sample_tlut_attempts;
+        stats.texture_sample_bilerp_attempts = ctx->rdp.texture_sample_bilerp_attempts;
+        stats.texture_sample_quad_attempts = ctx->rdp.texture_sample_quad_attempts;
+        stats.texture_sample_mid_texel_attempts = ctx->rdp.texture_sample_mid_texel_attempts;
+        stats.texture_sample_perspective_attempts = ctx->rdp.texture_sample_perspective_attempts;
+        stats.texture_sample_texel0_shade_attempts = ctx->rdp.texture_sample_texel0_shade_attempts;
+        stats.texture_sample_min_s = ctx->rdp.texture_sample_min_s;
+        stats.texture_sample_max_s = ctx->rdp.texture_sample_max_s;
+        stats.texture_sample_min_t = ctx->rdp.texture_sample_min_t;
+        stats.texture_sample_max_t = ctx->rdp.texture_sample_max_t;
+        stats.texture_sample_color_xor = ctx->rdp.texture_sample_color_xor;
+        stats.texture_sample_min_s_fixed = ctx->rdp.texture_sample_min_s_fixed;
+        stats.texture_sample_max_s_fixed = ctx->rdp.texture_sample_max_s_fixed;
+        stats.texture_sample_min_t_fixed = ctx->rdp.texture_sample_min_t_fixed;
+        stats.texture_sample_max_t_fixed = ctx->rdp.texture_sample_max_t_fixed;
+        stats.texture_sample_min_w_fixed = ctx->rdp.texture_sample_min_w_fixed;
+        stats.texture_sample_max_w_fixed = ctx->rdp.texture_sample_max_w_fixed;
         stats.rect_texture_sample_attempts = ctx->rdp.rect_texture_sample_attempts;
         stats.rect_texture_sample_hits = ctx->rdp.rect_texture_sample_hits;
         stats.rect_texture_sample_misses = ctx->rdp.rect_texture_sample_misses;
+        stats.tex_load_block_count = ctx->rdp.tex_load_block_count;
+        stats.tex_load_tile_count = ctx->rdp.tex_load_tile_count;
+        stats.tex_load_tlut_count = ctx->rdp.tex_load_tlut_count;
+        memcpy(stats.tex_load_by_format_size,
+               ctx->rdp.tex_load_by_format_size,
+               sizeof(stats.tex_load_by_format_size));
         stats.vi_ticks = ctx->rdp.vi_ticks;
         stats.process_rdp_ticks = ctx->rdp.process_rdp_ticks;
 #endif
