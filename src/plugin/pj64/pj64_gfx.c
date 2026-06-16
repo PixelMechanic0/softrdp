@@ -244,7 +244,6 @@ static bool upload_raw_cfb(vi_target target)
     return sr_present_upload_rgba8(&g_present, g_frame_pixels, target.width, target.height, target.width);
 }
 
-#if PJ64_LOG_ENABLED
 static const char *result_name(sr_result result)
 {
     switch (result) {
@@ -260,7 +259,63 @@ static const char *result_name(sr_result result)
         return "UNKNOWN";
     }
 }
-#endif
+
+static bool command_has_texture_debug(uint32_t command_id)
+{
+    switch ((rdp_command_id)command_id) {
+    case RDP_CMD_LOAD_TLUT:
+    case RDP_CMD_LOAD_BLOCK:
+    case RDP_CMD_LOAD_TILE:
+    case RDP_CMD_TEXTURE_RECTANGLE:
+    case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
+    case RDP_CMD_TEXTURE_TRIANGLE:
+    case RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void log_texture_debug(const sr_debug_stats *stats)
+{
+    if (!stats || !command_has_texture_debug(stats->last_command_id)) {
+        return;
+    }
+
+    pj64_log_printf("  tex-debug ti fmt=%u size=%u width=%u addr=%08x tile=%u fmt=%u size=%u tmem=%u line=%u tile_st=%u,%u-%u,%u",
+                      stats->last_texture_image_format,
+                      stats->last_texture_image_size,
+                      stats->last_texture_image_width,
+                      stats->last_texture_image_address,
+                      stats->last_tile_index,
+                      stats->last_tile_format,
+                      stats->last_tile_size,
+                      stats->last_tile_tmem,
+                      stats->last_tile_line,
+                      stats->last_tile_sl,
+                      stats->last_tile_tl,
+                      stats->last_tile_sh,
+                      stats->last_tile_th);
+
+    if (stats->last_command_id == RDP_CMD_LOAD_TLUT ||
+        stats->last_command_id == RDP_CMD_LOAD_BLOCK ||
+        stats->last_command_id == RDP_CMD_LOAD_TILE) {
+        pj64_log_printf("  load-debug sl=%u tl=%u sh=%u th/dxt=%u",
+                          stats->last_load_sl,
+                          stats->last_load_tl,
+                          stats->last_load_sh,
+                          stats->last_load_th);
+    } else if (stats->last_command_id == RDP_CMD_TEXTURE_RECTANGLE ||
+               stats->last_command_id == RDP_CMD_TEXTURE_RECTANGLE_FLIP) {
+        pj64_log_printf("  rect-debug s0=%d t0=%d dsdx=%d dtdy=%d",
+                          stats->last_rect_s0,
+                          stats->last_rect_t0,
+                          stats->last_rect_dsdx,
+                          stats->last_rect_dtdy);
+    }
+}
 
 static bool log_sample_u32(uint32_t count, uint32_t early_count, uint32_t interval)
 {
@@ -395,6 +450,13 @@ static void log_perf_summary(const char *header)
     uint64_t delta_rect_count = current_stats.rect_count - g_perf_baseline_stats.rect_count;
     uint64_t delta_tex_ticks = current_stats.tex_load_ticks - g_perf_baseline_stats.tex_load_ticks;
     uint64_t delta_tex_count = current_stats.tex_load_count - g_perf_baseline_stats.tex_load_count;
+    uint64_t delta_sample_attempts = current_stats.texture_sample_attempts - g_perf_baseline_stats.texture_sample_attempts;
+    uint64_t delta_sample_hits = current_stats.texture_sample_hits - g_perf_baseline_stats.texture_sample_hits;
+    uint64_t delta_sample_misses = current_stats.texture_sample_misses - g_perf_baseline_stats.texture_sample_misses;
+    uint64_t delta_sample_fallbacks = current_stats.texture_sample_shade_fallbacks - g_perf_baseline_stats.texture_sample_shade_fallbacks;
+    uint64_t delta_rect_sample_attempts = current_stats.rect_texture_sample_attempts - g_perf_baseline_stats.rect_texture_sample_attempts;
+    uint64_t delta_rect_sample_hits = current_stats.rect_texture_sample_hits - g_perf_baseline_stats.rect_texture_sample_hits;
+    uint64_t delta_rect_sample_misses = current_stats.rect_texture_sample_misses - g_perf_baseline_stats.rect_texture_sample_misses;
     uint64_t delta_vi_ticks = current_stats.vi_ticks - g_perf_baseline_stats.vi_ticks;
     uint64_t delta_commands = current_stats.commands_seen - g_perf_baseline_stats.commands_seen;
     uint64_t delta_draws = current_stats.draw_calls_seen - g_perf_baseline_stats.draw_calls_seen;
@@ -414,6 +476,14 @@ static void log_perf_summary(const char *header)
                       (unsigned long long)delta_rect_count, rect_ms, delta_rect_count ? rect_ms / delta_rect_count : 0.0);
     pj64_log_printf("    - Tex Loads:  %5llu calls, %8.3f ms (avg %7.3f ms/load)",
                       (unsigned long long)delta_tex_count, tex_ms, delta_tex_count ? tex_ms / delta_tex_count : 0.0);
+    pj64_log_printf("    - Tex Samples: tri attempts=%llu hits=%llu misses=%llu shade_fallbacks=%llu rect attempts=%llu hits=%llu misses=%llu",
+                      (unsigned long long)delta_sample_attempts,
+                      (unsigned long long)delta_sample_hits,
+                      (unsigned long long)delta_sample_misses,
+                      (unsigned long long)delta_sample_fallbacks,
+                      (unsigned long long)delta_rect_sample_attempts,
+                      (unsigned long long)delta_rect_sample_hits,
+                      (unsigned long long)delta_rect_sample_misses);
     pj64_log_printf("  Total VI Scanout:     %8.3f ms (avg %7.3f ms/frame)", vi_ms, vi_ms / g_perf_frame_count);
     pj64_log_printf("  Total Present/Draw:   %8.3f ms (avg %7.3f ms/frame)", g_perf_draw_total_ms, g_perf_draw_total_ms / g_perf_frame_count);
     pj64_log_printf("  Total Commands: %llu, Draw Calls: %llu",
@@ -535,6 +605,9 @@ void PJ64_CALL ProcessRDPList(void)
                               rdp_command_name((rdp_command_id)stats.last_command_id),
                               (unsigned long long)stats.commands_seen,
                               (unsigned long long)stats.draw_calls_seen);
+            if (result != SR_OK) {
+                log_texture_debug(&stats);
+            }
             g_last_logged_commands = stats.commands_seen;
             g_last_logged_draws = stats.draw_calls_seen;
         }

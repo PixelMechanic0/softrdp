@@ -132,6 +132,51 @@ static inline bool tmem_resolve_rgba32_address_raw(const rdp_tile *tile,
     return address->byte + 1u < SR_TMEM_SIZE && address->byte2 + 1u < SR_TMEM_SIZE;
 }
 
+static inline bool tmem_tile_extent_from_descriptor(const rdp_tile *tile, uint32_t *width, uint32_t *height)
+{
+    if (!tile || !width || !height || tile->sh < tile->sl || tile->th < tile->tl) {
+        return false;
+    }
+
+    *width = (tile->sh >> 2) - (tile->sl >> 2) + 1u;
+    *height = (tile->th >> 2) - (tile->tl >> 2) + 1u;
+    return *width != 0 && *height != 0;
+}
+
+static inline bool tmem_tile_sample_layout(const tmem_state *tmem,
+                                           const rdp_state *state,
+                                           uint32_t tile_index,
+                                           uint32_t *width,
+                                           uint32_t *height,
+                                           uint32_t *stride)
+{
+    if (!tmem || !state || !width || !height || !stride || tile_index >= 8) {
+        return false;
+    }
+
+    const rdp_tile *tile = &state->tiles[tile_index];
+    if (tmem->tile_width[tile_index] != 0 && tmem->tile_height[tile_index] != 0) {
+        *width = tmem->tile_width[tile_index];
+        *height = tmem->tile_height[tile_index];
+        *stride = tmem->tile_stride[tile_index];
+    } else if (tmem_tile_extent_from_descriptor(tile, width, height)) {
+        *stride = tile->line;
+        if (*stride == 0) {
+            const uint32_t bytes_per_texel = tile->size == RDP_SIZE_32BPP ? 4u :
+                                             tile->size == RDP_SIZE_16BPP ? 2u :
+                                             tile->size == RDP_SIZE_8BPP ? 1u : 0u;
+            if (bytes_per_texel == 0) {
+                return false;
+            }
+            *stride = tmem_align_row_stride(*width * bytes_per_texel);
+        }
+    } else {
+        return false;
+    }
+
+    return *stride != 0;
+}
+
 static inline bool tmem_resolve_texel_address_raw(const rdp_tile *tile,
                                                   uint32_t stride,
                                                   uint32_t local_s,
@@ -174,19 +219,25 @@ static inline bool tmem_resolve_texel_coord(const tmem_state *tmem,
                                             uint32_t *local_s,
                                             uint32_t *local_t)
 {
-    if (!tmem || !state || !bounds || !local_s || !local_t || tile_index >= 8 ||
-        tmem->tile_width[tile_index] == 0 || tmem->tile_height[tile_index] == 0) {
+    if (!tmem || !state || !bounds || !local_s || !local_t || tile_index >= 8) {
         return false;
     }
 
     const rdp_tile *tile = &state->tiles[tile_index];
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    if (!tmem_tile_sample_layout(tmem, state, tile_index, &width, &height, &stride)) {
+        return false;
+    }
+
     s = shift_tile_coord(s, tile->shift_s);
     t = shift_tile_coord(t, tile->shift_t);
 
     return resolve_tile_axis(s,
                              bounds->sl,
                              bounds->sh,
-                             tmem->tile_width[tile_index],
+                             width,
                              tile->clamp_s != 0,
                              tile->mirror_s != 0,
                              tile->mask_s,
@@ -194,7 +245,7 @@ static inline bool tmem_resolve_texel_coord(const tmem_state *tmem,
            resolve_tile_axis(t,
                              bounds->tl,
                              bounds->th,
-                             tmem->tile_height[tile_index],
+                             height,
                              tile->clamp_t != 0,
                              tile->mirror_t != 0,
                              tile->mask_t,
@@ -208,19 +259,24 @@ static inline bool tmem_resolve_texel_address(const tmem_state *tmem,
                                               uint32_t local_t,
                                               tmem_texel_address *address)
 {
-    if (!tmem || !state || !address || tile_index >= 8 ||
-        tmem->tile_width[tile_index] == 0 || tmem->tile_height[tile_index] == 0) {
+    if (!tmem || !state || !address || tile_index >= 8) {
         return false;
     }
 
     const rdp_tile *tile = &state->tiles[tile_index];
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    if (!tmem_tile_sample_layout(tmem, state, tile_index, &width, &height, &stride)) {
+        return false;
+    }
 
-    if (local_s >= tmem->tile_width[tile_index] || local_t >= tmem->tile_height[tile_index]) {
+    if (local_s >= width || local_t >= height) {
         return false;
     }
 
     return tmem_resolve_texel_address_raw(tile,
-                                          tmem->tile_stride[tile_index],
+                                          stride,
                                           local_s,
                                           local_t,
                                           address);
@@ -270,12 +326,22 @@ static inline bool tmem_sample_color(const tmem_state *tmem, const rdp_state *st
     }
 
     const rdp_tile *tile = &state->tiles[tile_index];
-    if (tile->format != RDP_FORMAT_RGBA) {
+    tmem_texel_address address;
+    if (!tmem_resolve_texel_address(tmem, state, tile_index, local_s, local_t, &address)) {
         return false;
     }
 
-    tmem_texel_address address;
-    if (!tmem_resolve_texel_address(tmem, state, tile_index, local_s, local_t, &address)) {
+    if (tile->format == RDP_FORMAT_IA && tile->size == RDP_SIZE_16BPP) {
+        if (address.bytes != 2) {
+            return false;
+        }
+        const uint8_t intensity = tmem->bytes[address.byte];
+        const uint8_t alpha = tmem->bytes[address.byte + 1u];
+        *color = (rdp_color){ intensity, intensity, intensity, alpha };
+        return true;
+    }
+
+    if (tile->format != RDP_FORMAT_RGBA) {
         return false;
     }
 

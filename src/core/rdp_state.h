@@ -128,6 +128,13 @@ typedef struct rdp_state {
     uint64_t rect_ticks;
     uint64_t tex_load_count;
     uint64_t tex_load_ticks;
+    uint64_t texture_sample_attempts;
+    uint64_t texture_sample_hits;
+    uint64_t texture_sample_misses;
+    uint64_t texture_sample_shade_fallbacks;
+    uint64_t rect_texture_sample_attempts;
+    uint64_t rect_texture_sample_hits;
+    uint64_t rect_texture_sample_misses;
     uint64_t vi_ticks;
     uint64_t process_rdp_ticks;
 } rdp_state;

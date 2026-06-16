@@ -222,7 +222,7 @@ static void triangle_span_state_step(const raster_decoded_triangle *decoded,
 
 static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
                                  const tmem_state *tmem,
-                                 const rdp_state *state,
+                                 rdp_state *state,
                                  int64_t dx_fixed,
                                  int64_t dy_fixed,
                                  int x,
@@ -246,7 +246,9 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
             const uint32_t t = texture_coord_to_texel(t_fixed);
 
             rdp_color texel0;
+            state->texture_sample_attempts++;
             if (tmem_sample_color(tmem, state, decoded->position.tile & 7u, s, t, bounds, &texel0)) {
+                state->texture_sample_hits++;
                 rdp_color shade = {0, 0, 0, 255};
                 
                 const bool needs_shade = state->combiner_needs_shade;
@@ -258,6 +260,7 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
                 *color = pipeline_shade_pixel(state, &inputs).color;
                 return true;
             }
+            state->texture_sample_misses++;
         } else {
             *color = state ? state->primitive_color : (rdp_color){0, 0, 0, 255};
             return true;
@@ -265,6 +268,9 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
     }
 
     if (decoded->has_shade) {
+        if (state && decoded->has_texture) {
+            state->texture_sample_shade_fallbacks++;
+        }
         *color = shade_interpolated_color(decoded, x, y);
         return true;
     }
@@ -274,7 +280,7 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
 
 sr_result pipeline_process_triangle_pixel(sr_memory *memory,
                                           tmem_state *tmem,
-                                          const rdp_state *state,
+                                          rdp_state *state,
                                           const raster_decoded_triangle *decoded,
                                           int x, int y,
                                           bool fill_mode,
@@ -316,7 +322,7 @@ sr_result pipeline_process_triangle_pixel(sr_memory *memory,
  */
 sr_result pipeline_process_triangle_span(sr_memory *memory,
                                          tmem_state *tmem,
-                                         const rdp_state *state,
+                                         rdp_state *state,
                                          const raster_decoded_triangle *decoded,
                                          int x0, int x1, int y,
                                          bool fill_mode,
@@ -369,10 +375,12 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
                     }
 
                     rdp_color texel0;
+                    state->texture_sample_attempts++;
                     if (tmem_sample_color(tmem, state, decoded->position.tile & 7u,
                                           texture_coord_to_texel(s_fixed),
                                           texture_coord_to_texel(t_fixed),
                                           bounds, &texel0)) {
+                        state->texture_sample_hits++;
                         rdp_color color;
                         if (decoded->has_shade && state->combiner_needs_shade) {
                             const rdp_color shade = shade_base_color(&span.shade);
@@ -388,6 +396,8 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
                             return result;
                         }
                         wrote_color = true;
+                    } else {
+                        state->texture_sample_misses++;
                     }
                 } else {
                     sr_result result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y,
@@ -399,6 +409,9 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
                 }
 
                 if (!wrote_color && decoded->has_shade) {
+                    if (state) {
+                        state->texture_sample_shade_fallbacks++;
+                    }
                     sr_result result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y,
                                                                shade_base_color(&span.shade));
                     if (result != SR_OK) {
@@ -422,7 +435,7 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
 
 sr_result pipeline_process_rect_pixel(sr_memory *memory,
                                       tmem_state *tmem,
-                                      const rdp_state *state,
+                                      rdp_state *state,
                                       uint32_t tile_index,
                                       uint32_t s, uint32_t t,
                                       uint32_t x, uint32_t y,
@@ -433,8 +446,17 @@ sr_result pipeline_process_rect_pixel(sr_memory *memory,
     }
 
     rdp_color texel0;
+    if (state) {
+        state->rect_texture_sample_attempts++;
+    }
     if (!tmem_sample_color(tmem, state, tile_index, s, t, bounds, &texel0)) {
+        if (state) {
+            state->rect_texture_sample_misses++;
+        }
         return SR_ERROR_INVALID_ARGUMENT;
+    }
+    if (state) {
+        state->rect_texture_sample_hits++;
     }
 
     pipeline_inputs inputs = {

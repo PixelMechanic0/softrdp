@@ -96,6 +96,67 @@ static void rdp_state_init(rdp_state *state)
     state->combiner_needs_shade = false;
 }
 
+static void capture_texture_debug(sr_debug_stats *debug, const rdp_state *state, const rdp_command *cmd)
+{
+    if (!debug || !state || !cmd) {
+        return;
+    }
+
+    uint32_t tile_index = 0;
+    debug->last_texture_image_format = (uint32_t)state->texture_image.format;
+    debug->last_texture_image_size = (uint32_t)state->texture_image.size;
+    debug->last_texture_image_width = state->texture_image.width;
+    debug->last_texture_image_address = state->texture_image.address;
+    debug->last_load_sl = 0;
+    debug->last_load_tl = 0;
+    debug->last_load_sh = 0;
+    debug->last_load_th = 0;
+    debug->last_rect_s0 = 0;
+    debug->last_rect_t0 = 0;
+    debug->last_rect_dsdx = 0;
+    debug->last_rect_dtdy = 0;
+
+    switch (cmd->id) {
+    case RDP_CMD_LOAD_TLUT:
+    case RDP_CMD_LOAD_BLOCK:
+    case RDP_CMD_LOAD_TILE:
+        tile_index = cmd->decoded.load.tile_index;
+        debug->last_load_sl = cmd->decoded.load.sl;
+        debug->last_load_tl = cmd->decoded.load.tl;
+        debug->last_load_sh = cmd->decoded.load.sh;
+        debug->last_load_th = cmd->decoded.load.th;
+        break;
+    case RDP_CMD_TEXTURE_RECTANGLE:
+    case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
+        tile_index = cmd->decoded.rect.tile_index;
+        debug->last_rect_s0 = cmd->decoded.rect.s0;
+        debug->last_rect_t0 = cmd->decoded.rect.t0;
+        debug->last_rect_dsdx = cmd->decoded.rect.dsdx;
+        debug->last_rect_dtdy = cmd->decoded.rect.dtdy;
+        break;
+    case RDP_CMD_TEXTURE_TRIANGLE:
+    case RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:
+        tile_index = cmd->decoded.triangle.position.tile & 7u;
+        break;
+    default:
+        return;
+    }
+
+    tile_index &= 7u;
+    const rdp_tile *tile = &state->tiles[tile_index];
+    debug->last_tile_index = tile_index;
+    debug->last_tile_format = (uint32_t)tile->format;
+    debug->last_tile_size = (uint32_t)tile->size;
+    debug->last_tile_tmem = tile->tmem;
+    debug->last_tile_line = tile->line;
+    debug->last_tile_sl = tile->sl;
+    debug->last_tile_tl = tile->tl;
+    debug->last_tile_sh = tile->sh;
+    debug->last_tile_th = tile->th;
+}
+
 sr_context *sr_create(const sr_host_interface *host)
 {
     sr_context *ctx = calloc(1, sizeof(*ctx));
@@ -192,6 +253,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
 
         if (result != SR_OK) {
             ctx->debug.last_result = result;
+            capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
             finish_rdp_list(ctx, end, true);
             return result;
         }
@@ -262,6 +324,13 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
         stats.rect_ticks = ctx->rdp.rect_ticks;
         stats.tex_load_count = ctx->rdp.tex_load_count;
         stats.tex_load_ticks = ctx->rdp.tex_load_ticks;
+        stats.texture_sample_attempts = ctx->rdp.texture_sample_attempts;
+        stats.texture_sample_hits = ctx->rdp.texture_sample_hits;
+        stats.texture_sample_misses = ctx->rdp.texture_sample_misses;
+        stats.texture_sample_shade_fallbacks = ctx->rdp.texture_sample_shade_fallbacks;
+        stats.rect_texture_sample_attempts = ctx->rdp.rect_texture_sample_attempts;
+        stats.rect_texture_sample_hits = ctx->rdp.rect_texture_sample_hits;
+        stats.rect_texture_sample_misses = ctx->rdp.rect_texture_sample_misses;
         stats.vi_ticks = ctx->rdp.vi_ticks;
         stats.process_rdp_ticks = ctx->rdp.process_rdp_ticks;
 #endif
