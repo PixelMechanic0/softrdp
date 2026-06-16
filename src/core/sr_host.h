@@ -36,6 +36,7 @@ typedef enum sr_vi_register {
 typedef struct sr_host_interface {
     uint8_t *rdram;
     uint32_t rdram_size;
+    bool rdram_bswapped;
     uint8_t *dmem;
     uint32_t *dp_regs[SR_DP_REGISTER_COUNT];
     uint32_t *vi_regs[SR_VI_REGISTER_COUNT];

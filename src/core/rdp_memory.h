@@ -6,6 +6,7 @@
 typedef struct sr_memory {
     uint8_t *rdram;
     uint32_t rdram_size;
+    bool rdram_bswapped;
     uint8_t *dmem;
 } sr_memory;
 

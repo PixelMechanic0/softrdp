@@ -9,6 +9,12 @@ typedef struct sr_context sr_context;
 typedef struct sr_debug_stats {
     uint64_t commands_seen;
     uint64_t draw_calls_seen;
+    uint32_t last_list_current;
+    uint32_t last_list_end;
+    uint32_t last_list_bytes;
+    uint32_t last_command_address;
+    uint32_t last_command_id;
+    sr_result last_result;
 } sr_debug_stats;
 
 sr_context *sr_create(const sr_host_interface *host);

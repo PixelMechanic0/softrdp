@@ -86,7 +86,8 @@ typedef struct rdp_other_modes {
 
 typedef enum rdp_simple_combiner {
     RDP_SIMPLE_COMBINER_TEXEL0 = 0,
-    RDP_SIMPLE_COMBINER_PRIMITIVE = 1
+    RDP_SIMPLE_COMBINER_PRIMITIVE = 1,
+    RDP_SIMPLE_COMBINER_TEXEL0_SHADE = 2
 } rdp_simple_combiner;
 
 typedef struct rdp_state {

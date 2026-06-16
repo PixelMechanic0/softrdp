@@ -202,6 +202,9 @@ static void set_combine(rdp_state *state, uint32_t w0, uint32_t w1)
     if (rgb_muladd0 == 3u && rgb_mulsub0 == 8u && rgb_mul0 == 16u && rgb_add0 == 7u &&
         alpha_muladd0 == 3u && alpha_mulsub0 == 7u && alpha_mul0 == 7u && alpha_add0 == 7u) {
         state->simple_combiner = RDP_SIMPLE_COMBINER_PRIMITIVE;
+    } else if (rgb_muladd0 == 1u && rgb_mulsub0 == 8u && rgb_mul0 == 4u && rgb_add0 == 7u &&
+               alpha_muladd0 == 1u && alpha_mulsub0 == 7u && alpha_mul0 == 4u && alpha_add0 == 7u) {
+        state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0_SHADE;
     }
 }
 

@@ -5,6 +5,8 @@
 #include "rdp_commands.h"
 #include "tmem.h"
 
+#include <stdint.h>
+
 static int32_t sign_extend(uint32_t value, unsigned bits)
 {
     const uint32_t mask = 1u << (bits - 1u);
@@ -96,6 +98,299 @@ static raster_depth_setup decode_depth_setup(const uint32_t *w)
     setup.dzde = (int32_t)w[2];
     setup.dzdy = (int32_t)w[3];
     return setup;
+}
+
+static uint8_t shade_component_to_u8(int32_t value)
+{
+    int32_t component = value >> 16;
+    if (component < 0) {
+        return 0;
+    }
+    if (component > 255) {
+        return 255;
+    }
+    return (uint8_t)component;
+}
+
+static rdp_color shade_base_color(const raster_shade_setup *shade)
+{
+    return (rdp_color){
+        shade_component_to_u8(shade->r),
+        shade_component_to_u8(shade->g),
+        shade_component_to_u8(shade->b),
+        shade_component_to_u8(shade->a)
+    };
+}
+
+static rdp_color shade_interpolated_color(const raster_decoded_triangle *decoded, int x, int y, int origin_x, int origin_y)
+{
+    const int64_t dx = (int64_t)(x - origin_x);
+    const int64_t dy = (int64_t)(y - origin_y);
+    raster_shade_setup shade = decoded->shade;
+
+    shade.r = (int32_t)((int64_t)shade.r + (int64_t)shade.drdx * dx + (int64_t)shade.drdy * dy);
+    shade.g = (int32_t)((int64_t)shade.g + (int64_t)shade.dgdx * dx + (int64_t)shade.dgdy * dy);
+    shade.b = (int32_t)((int64_t)shade.b + (int64_t)shade.dbdx * dx + (int64_t)shade.dbdy * dy);
+    shade.a = (int32_t)((int64_t)shade.a + (int64_t)shade.dadx * dx + (int64_t)shade.dady * dy);
+
+    return shade_base_color(&shade);
+}
+
+static int32_t texture_interpolated_value(int32_t base, int32_t ddx, int32_t ddy, int x, int y, int origin_x, int origin_y)
+{
+    const int64_t dx = (int64_t)(x - origin_x);
+    const int64_t dy = (int64_t)(y - origin_y);
+    return (int32_t)((int64_t)base + (int64_t)ddx * dx + (int64_t)ddy * dy);
+}
+
+static int32_t perspective_divide_coord(int32_t coord, int32_t w)
+{
+    int64_t divided;
+
+    if (w <= 0) {
+        return 0;
+    }
+
+    divided = ((int64_t)coord << 16) / (int64_t)w;
+    if (divided < 0) {
+        return 0;
+    }
+    if (divided > INT32_MAX) {
+        return INT32_MAX;
+    }
+    return (int32_t)divided;
+}
+
+static uint32_t texture_coord_to_texel(int32_t value)
+{
+    if (value <= 0) {
+        return 0;
+    }
+    return (uint32_t)value >> 16;
+}
+
+static uint16_t depth_interpolated_value(const raster_decoded_triangle *decoded, int x, int y, int origin_x, int origin_y)
+{
+    const int64_t dx = (int64_t)(x - origin_x);
+    const int64_t dy = (int64_t)(y - origin_y);
+    const int64_t value = (int64_t)decoded->depth.z +
+                          (int64_t)decoded->depth.dzdx * dx +
+                          (int64_t)decoded->depth.dzdy * dy;
+
+    if (value <= 0) {
+        return 0;
+    }
+    if (value >= 0xffff0000ll) {
+        return 0xffffu;
+    }
+    return (uint16_t)((uint64_t)value >> 16);
+}
+
+static sr_result depth_test_and_update(sr_memory *memory,
+                                       const rdp_state *state,
+                                       const raster_decoded_triangle *decoded,
+                                       int x,
+                                       int y,
+                                       int origin_x,
+                                       int origin_y,
+                                       bool *visible)
+{
+    uint16_t old_depth = 0xffffu;
+    const uint16_t new_depth = depth_interpolated_value(decoded, x, y, origin_x, origin_y);
+    const uint32_t pixel = (uint32_t)y * state->color_image.width + (uint32_t)x;
+    const uint32_t addr = state->depth_image_address + pixel * 2u;
+
+    *visible = true;
+    if (!decoded->has_depth || state->depth_image_address == 0) {
+        return SR_OK;
+    }
+
+    if ((state->other_modes.z_compare || state->other_modes.z_update) &&
+        !sr_memory_read_be16(memory, addr, &old_depth)) {
+        return SR_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (state->other_modes.z_compare && new_depth > old_depth) {
+        *visible = false;
+        return SR_OK;
+    }
+
+    if (state->other_modes.z_update &&
+        !sr_memory_write_be16(memory, addr, new_depth)) {
+        return SR_ERROR_INVALID_ARGUMENT;
+    }
+
+    return SR_OK;
+}
+
+static int fixed_floor_div(int64_t value, int64_t scale)
+{
+    int64_t quotient = value / scale;
+    const int64_t remainder = value % scale;
+
+    if (remainder && value < 0) {
+        quotient--;
+    }
+    return (int)quotient;
+}
+
+static int fixed_ceil_div(int64_t value, int64_t scale)
+{
+    return -fixed_floor_div(-value, scale);
+}
+
+static int fixed_floor_2(int32_t value)
+{
+    return fixed_floor_div(value, 4);
+}
+
+static int fixed_ceil_16(int64_t value)
+{
+    return fixed_ceil_div(value, 0x10000);
+}
+
+static int scissor_min_x(const rdp_state *state)
+{
+    return state->scissor_x0 ? (int)((state->scissor_x0 + 3u) >> 2) : 0;
+}
+
+static int scissor_min_y(const rdp_state *state)
+{
+    return state->scissor_y0 ? (int)((state->scissor_y0 + 3u) >> 2) : 0;
+}
+
+static int scissor_max_x(const rdp_state *state)
+{
+    return state->scissor_x1 ? (int)((state->scissor_x1 - 1u) >> 2) : 0x3ff;
+}
+
+static int scissor_max_y(const rdp_state *state)
+{
+    return state->scissor_y1 ? (int)((state->scissor_y1 - 1u) >> 2) : 0x3ff;
+}
+
+typedef struct raster_span {
+    int y;
+    int x0;
+    int x1;
+} raster_span;
+
+static bool triangle_span_for_y(const raster_triangle_setup *setup, int y, raster_span *span)
+{
+    int64_t xa;
+    int64_t xb;
+    const int yh = fixed_floor_2(setup->yh);
+    const int ym = fixed_floor_2(setup->ym);
+
+    xa = (int64_t)setup->xh + (int64_t)setup->dxhdy * (int64_t)(y - yh);
+    if (y < ym) {
+        xb = (int64_t)setup->xm + (int64_t)setup->dxmdy * (int64_t)(y - yh);
+    } else {
+        xb = (int64_t)setup->xl + (int64_t)setup->dxldy * (int64_t)(y - ym);
+    }
+
+    if (xb < xa) {
+        const int64_t tmp = xa;
+        xa = xb;
+        xb = tmp;
+    }
+
+    span->y = y;
+    span->x0 = fixed_ceil_16(xa);
+    span->x1 = fixed_ceil_16(xb) - 1;
+    return span->x0 <= span->x1;
+}
+
+static bool clip_span_to_scissor(raster_span *span, const rdp_state *state)
+{
+    const int min_y = scissor_min_y(state);
+    const int max_y = scissor_max_y(state);
+    const int min_x = scissor_min_x(state);
+    const int max_x = scissor_max_x(state);
+
+    if (span->y < min_y || span->y > max_y) {
+        return false;
+    }
+    if (span->x0 < min_x) {
+        span->x0 = min_x;
+    }
+    if (span->x1 > max_x) {
+        span->x1 = max_x;
+    }
+    return span->x0 <= span->x1;
+}
+
+static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
+                                 const tmem_state *tmem,
+                                 const rdp_state *state,
+                                 int x,
+                                 int y,
+                                 int origin_x,
+                                 int origin_y,
+                                 rdp_color *color)
+{
+    rdp_color shade = {0, 0, 0, 255};
+    rdp_color texel0 = {0, 0, 0, 0};
+    bool have_texel = false;
+
+    if (decoded->has_shade) {
+        shade = shade_interpolated_color(decoded, x, y, origin_x, origin_y);
+    }
+
+    if (decoded->has_texture) {
+        uint16_t texel;
+        int32_t s_fixed = texture_interpolated_value(decoded->texture.s,
+                                                     decoded->texture.dsdx,
+                                                     decoded->texture.dsdy,
+                                                     x,
+                                                     y,
+                                                     origin_x,
+                                                     origin_y);
+        int32_t t_fixed = texture_interpolated_value(decoded->texture.t,
+                                                     decoded->texture.dtdx,
+                                                     decoded->texture.dtdy,
+                                                     x,
+                                                     y,
+                                                     origin_x,
+                                                     origin_y);
+
+        if (state->other_modes.perspective) {
+            const int32_t w_fixed = texture_interpolated_value(decoded->texture.w,
+                                                               decoded->texture.dwdx,
+                                                               decoded->texture.dwdy,
+                                                               x,
+                                                               y,
+                                                               origin_x,
+                                                               origin_y);
+            s_fixed = perspective_divide_coord(s_fixed, w_fixed);
+            t_fixed = perspective_divide_coord(t_fixed, w_fixed);
+        }
+
+        const uint32_t s = texture_coord_to_texel(s_fixed);
+        const uint32_t t = texture_coord_to_texel(t_fixed);
+
+        if (tmem_sample_rgba5551(tmem, state, decoded->position.tile & 7u, s, t, &texel)) {
+            texel0 = pipeline_rgba5551_to_color(texel);
+            have_texel = true;
+        }
+    }
+
+    if (have_texel) {
+        const pipeline_inputs inputs = {
+            .shade = shade,
+            .texel0 = texel0,
+            .primitive = state->primitive_color
+        };
+        *color = pipeline_shade_pixel(state, &inputs).color;
+        return true;
+    }
+
+    if (decoded->has_shade) {
+        *color = shade;
+        return true;
+    }
+
+    return false;
 }
 
 sr_result raster_decode_triangle(const rdp_command *cmd, raster_decoded_triangle *out)
@@ -199,66 +494,57 @@ static bool clip_rect_to_scissor(raster_rect *rect, const rdp_state *state)
 
 sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
 {
-    (void)tmem;
     raster_decoded_triangle decoded;
     sr_result result = raster_decode_triangle(cmd, &decoded);
-    if (result != SR_OK || cmd->id != RDP_CMD_FILL_TRIANGLE) {
+    if (result != SR_OK) {
         return result;
     }
+    if (cmd->id != RDP_CMD_FILL_TRIANGLE && !decoded.has_shade && !decoded.has_texture) {
+        return SR_OK;
+    }
 
-    const int yh = decoded.position.yh >> 2;
-    const int ym = decoded.position.ym >> 2;
-    const int yl = decoded.position.yl >> 2;
-    const int64_t xh = decoded.position.xh;
-    const int64_t xm = decoded.position.xm;
-    const int64_t xl = decoded.position.xl;
-    const int64_t dxhdy = decoded.position.dxhdy;
-    const int64_t dxmdy = decoded.position.dxmdy;
-    const int64_t dxldy = decoded.position.dxldy;
+    const int yh = fixed_floor_2(decoded.position.yh);
+    const int yl = fixed_floor_2(decoded.position.yl);
+    const bool fill_triangle = cmd->id == RDP_CMD_FILL_TRIANGLE;
+    const int shade_origin_x = fixed_ceil_16(decoded.position.xh);
+    const int shade_origin_y = yh;
 
     if (yl <= yh) {
         return SR_OK;
     }
 
     for (int y = yh; y < yl; y++) {
-        int64_t xa = xh + dxhdy * (int64_t)(y - yh);
-        int64_t xb;
-
-        if (y < ym) {
-            xb = xm + dxmdy * (int64_t)(y - yh);
-        } else {
-            xb = xl + dxldy * (int64_t)(y - ym);
-        }
-
-        if (xb < xa) {
-            int64_t tmp = xa;
-            xa = xb;
-            xb = tmp;
-        }
-
-        int x0 = xa >= 0 ? (int)((xa + 0xffff) >> 16) : (int)(xa / 0x10000);
-        int x1 = xb >= 0 ? (int)(((xb + 0xffff) >> 16) - 1) : (int)((xb / 0x10000) - 1);
-
-        if (state->scissor_y0 && y < (int)((state->scissor_y0 + 3u) >> 2)) {
+        raster_span span;
+        if (!triangle_span_for_y(&decoded.position, y, &span)) {
             continue;
         }
-        if (state->scissor_y1 && y > (int)((state->scissor_y1 - 1u) >> 2)) {
+        if (!clip_span_to_scissor(&span, state)) {
             continue;
         }
 
-        if (state->scissor_x0 && x0 < (int)((state->scissor_x0 + 3u) >> 2)) {
-            x0 = (int)((state->scissor_x0 + 3u) >> 2);
-        }
-        if (state->scissor_x1 && x1 > (int)((state->scissor_x1 - 1u) >> 2)) {
-            x1 = (int)((state->scissor_x1 - 1u) >> 2);
-        }
-
-        for (int x = x0; x <= x1; x++) {
+        for (int x = span.x0; x <= span.x1; x++) {
+            bool visible;
             if (x < 0 || y < 0) {
                 continue;
             }
 
-            result = framebuffer_write_fill_pixel(memory, state, (uint32_t)x, (uint32_t)y);
+            result = depth_test_and_update(memory, state, &decoded, x, y, shade_origin_x, shade_origin_y, &visible);
+            if (result != SR_OK) {
+                return result;
+            }
+            if (!visible) {
+                continue;
+            }
+
+            if (fill_triangle) {
+                result = framebuffer_write_fill_pixel(memory, state, (uint32_t)x, (uint32_t)y);
+            } else {
+                rdp_color color;
+                if (!triangle_pixel_color(&decoded, tmem, state, x, y, shade_origin_x, shade_origin_y, &color)) {
+                    continue;
+                }
+                result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y, color);
+            }
             if (result != SR_OK) {
                 return result;
             }

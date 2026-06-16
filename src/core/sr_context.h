@@ -12,6 +12,7 @@ struct sr_context {
     rdp_state rdp;
     tmem_state tmem;
     vi_state vi;
+    sr_debug_stats debug;
 };
 
 #endif

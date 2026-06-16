@@ -8,6 +8,7 @@
 
 #define DP_STATUS_XBUS_DMA 0x001u
 #define DP_INTERRUPT 0x20u
+#define MAX_RDP_LIST_BYTES (1024u * 1024u)
 
 static uint32_t read_reg(uint32_t *const *regs, uint32_t index)
 {
@@ -103,9 +104,20 @@ sr_result sr_process_rdp_list(sr_context *ctx)
     current = read_reg(ctx->host.dp_regs, SR_DP_CURRENT) & ~7u;
     end = read_reg(ctx->host.dp_regs, SR_DP_END) & ~7u;
     xbus_dma = (read_reg(ctx->host.dp_regs, SR_DP_STATUS) & DP_STATUS_XBUS_DMA) != 0;
+    ctx->debug.last_list_current = current;
+    ctx->debug.last_list_end = end;
+    ctx->debug.last_list_bytes = end > current ? end - current : 0u;
+    ctx->debug.last_command_address = current;
+    ctx->debug.last_command_id = 0u;
+    ctx->debug.last_result = SR_OK;
 
     if (end <= current) {
         return SR_OK;
+    }
+    if (end - current > MAX_RDP_LIST_BYTES) {
+        ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
+        finish_rdp_list(ctx, end, true);
+        return SR_ERROR_BAD_COMMAND;
     }
 
     while (current < end) {
@@ -114,19 +126,25 @@ sr_result sr_process_rdp_list(sr_context *ctx)
         uint32_t current_word = current >> 2;
 
         if (!read_command_word(ctx, xbus_dma, current_word, &first_word)) {
+            ctx->debug.last_command_address = current;
+            ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
             finish_rdp_list(ctx, end, true);
             return SR_ERROR_BAD_COMMAND;
         }
 
         cmd.id = (rdp_command_id)((first_word >> 24) & 0x3fu);
+        ctx->debug.last_command_address = current;
+        ctx->debug.last_command_id = (uint32_t)cmd.id;
         cmd.word_count = rdp_command_word_count(cmd.id);
         if (cmd.word_count == 0 || cmd.word_count > SR_MAX_COMMAND_WORDS) {
+            ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
             finish_rdp_list(ctx, end, true);
             return SR_ERROR_BAD_COMMAND;
         }
 
         for (uint8_t i = 0; i < cmd.word_count; i++) {
             if (!read_command_word(ctx, xbus_dma, current_word + i, &cmd.words[i])) {
+                ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
                 finish_rdp_list(ctx, end, true);
                 return SR_ERROR_BAD_COMMAND;
             }
@@ -134,6 +152,7 @@ sr_result sr_process_rdp_list(sr_context *ctx)
 
         sr_result result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, &cmd);
         if (result != SR_OK) {
+            ctx->debug.last_result = result;
             finish_rdp_list(ctx, end, true);
             return result;
         }
@@ -157,9 +176,10 @@ sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
 
 sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
 {
-    sr_debug_stats stats = {0, 0};
+    sr_debug_stats stats = {0};
 
     if (ctx) {
+        stats = ctx->debug;
         stats.commands_seen = ctx->rdp.commands_seen;
         stats.draw_calls_seen = ctx->rdp.draw_calls_seen;
     }
