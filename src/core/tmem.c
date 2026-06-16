@@ -43,6 +43,17 @@ static void record_loaded_tile(tmem_state *tmem,
     tmem->loads_seen++;
 }
 
+static bool tmem_write_be16(tmem_state *tmem, uint32_t addr, uint16_t value)
+{
+    if (!tmem || addr + 1u >= SR_TMEM_SIZE) {
+        return false;
+    }
+
+    tmem->bytes[addr + 0u] = (uint8_t)(value >> 8);
+    tmem->bytes[addr + 1u] = (uint8_t)value;
+    return true;
+}
+
 static sr_result load_rgba16_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_tile *tile, const rdp_command *cmd)
 {
     const uint32_t tile_index = cmd->decoded.load.tile_index;
@@ -57,26 +68,23 @@ static sr_result load_rgba16_tile(tmem_state *tmem, sr_memory *memory, const rdp
 
     const uint32_t width = sh - sl + 1u;
     const uint32_t height = th - tl + 1u;
-    const uint32_t stride = tile->line ? tile->line : width * 2u;
-    const uint32_t dst_base = tile->tmem;
-
-    if (dst_base + (height - 1u) * stride + width * 2u > SR_TMEM_SIZE) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
+    const uint32_t stride = tile->line ? tile->line : tmem_align_row_stride(width * 2u);
 
     for (uint32_t y = 0; y < height; y++) {
         for (uint32_t x = 0; x < width; x++) {
             uint16_t texel;
+            tmem_texel_address dst;
             const uint32_t src_pixel = (tl + y) * state->texture_image.width + (sl + x);
             const uint32_t src_addr = state->texture_image.address + src_pixel * 2u;
-            const uint32_t dst_addr = dst_base + y * stride + x * 2u;
 
             if (!sr_memory_read_be16(memory, src_addr, &texel)) {
                 return SR_ERROR_INVALID_ARGUMENT;
             }
 
-            tmem->bytes[dst_addr + 0u] = (uint8_t)(texel >> 8);
-            tmem->bytes[dst_addr + 1u] = (uint8_t)texel;
+            if (!tmem_resolve_rgba16_address_raw(tile, stride, x, y, &dst) ||
+                !tmem_write_be16(tmem, dst.byte, texel)) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
         }
     }
 
@@ -126,27 +134,24 @@ static sr_result load_rgba16_block(tmem_state *tmem, sr_memory *memory, const rd
         }
     }
 
-    const uint32_t dst_base = tile->tmem;
-    const uint32_t stride = tile->line ? tile->line : sample_width * 2u;
-
-    if (dst_base + (sample_height - 1u) * stride + sample_width * 2u > SR_TMEM_SIZE) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
+    const uint32_t stride = tile->line ? tile->line : tmem_align_row_stride(sample_width * 2u);
 
     for (uint32_t x = 0; x < texel_count; x++) {
         uint16_t texel;
+        tmem_texel_address dst;
         const uint32_t src_pixel = start_t * state->texture_image.width + start_s + x;
         const uint32_t src_addr = state->texture_image.address + src_pixel * 2u;
         const uint32_t dst_row = x / sample_width;
         const uint32_t dst_col = x - dst_row * sample_width;
-        const uint32_t dst_addr = dst_base + dst_row * stride + dst_col * 2u;
 
         if (!sr_memory_read_be16(memory, src_addr, &texel)) {
             return SR_ERROR_INVALID_ARGUMENT;
         }
 
-        tmem->bytes[dst_addr + 0u] = (uint8_t)(texel >> 8);
-        tmem->bytes[dst_addr + 1u] = (uint8_t)texel;
+        if (!tmem_resolve_rgba16_address_raw(tile, stride, dst_col, dst_row, &dst) ||
+            !tmem_write_be16(tmem, dst.byte, texel)) {
+            return SR_ERROR_INVALID_ARGUMENT;
+        }
     }
 
     record_loaded_tile(tmem, tile_index, sample_width, sample_height, stride, 0u, 0u, sample_width - 1u, sample_height - 1u);

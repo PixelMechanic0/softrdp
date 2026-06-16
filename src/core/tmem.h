@@ -39,6 +39,11 @@ static inline uint32_t shift_tile_coord(uint32_t coord, uint8_t shift)
     return coord;
 }
 
+static inline uint32_t tmem_align_row_stride(uint32_t bytes)
+{
+    return (bytes + 7u) & ~7u;
+}
+
 static inline bool resolve_tile_axis(uint32_t coord,
                                      uint32_t lo,
                                      uint32_t hi,
@@ -82,6 +87,27 @@ static inline bool resolve_tile_axis(uint32_t coord,
 
     *local = (uint32_t)relative;
     return true;
+}
+
+static inline bool tmem_resolve_rgba16_address_raw(const rdp_tile *tile,
+                                                   uint32_t stride,
+                                                   uint32_t local_s,
+                                                   uint32_t local_t,
+                                                   tmem_texel_address *address)
+{
+    if (!tile || !address || stride == 0) {
+        return false;
+    }
+
+    /*
+     * RGBA16 fetches words from TMEM in four-word groups. Odd rows flip word
+     * address bit 1, which is the first piece of the real TMEM lane addressing
+     * model that matters for nearest RGBA16 sampling.
+     */
+    const uint32_t word = local_s ^ ((local_t & 1u) ? 2u : 0u);
+    address->byte = tile->tmem + local_t * stride + word * 2u;
+    address->subtexel = 0;
+    return address->byte + 1u < SR_TMEM_SIZE;
 }
 
 static inline bool tmem_resolve_texel_coord(const tmem_state *tmem,
@@ -141,9 +167,11 @@ static inline bool tmem_resolve_texel_address(const tmem_state *tmem,
         return false;
     }
 
-    address->byte = tile->tmem + local_t * tmem->tile_stride[tile_index] + local_s * 2u;
-    address->subtexel = 0;
-    return address->byte + 1u < SR_TMEM_SIZE;
+    return tmem_resolve_rgba16_address_raw(tile,
+                                           tmem->tile_stride[tile_index],
+                                           local_s,
+                                           local_t,
+                                           address);
 }
 
 static inline bool tmem_sample_rgba5551(const tmem_state *tmem, const rdp_state *state, uint32_t tile_index, uint32_t s, uint32_t t, const rdp_tile_bounds *bounds, uint16_t *texel)
