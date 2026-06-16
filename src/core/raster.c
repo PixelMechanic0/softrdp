@@ -147,33 +147,32 @@ typedef struct raster_span {
 
 static bool triangle_span_for_y(const raster_triangle_setup *setup, int y, raster_span *span)
 {
-    int64_t xa;
-    int64_t xb;
+    int64_t xh;
+    int64_t xl;
 
     // Center of scanline y is y * 4 + 2 subpixels
     int64_t y_center = (int64_t)y * 4 + 2;
-    int64_t dy_h = y_center - (int64_t)setup->yh;
+    int64_t yh_base = (int64_t)setup->yh & ~3ll;
+    int64_t dy_h = y_center - yh_base;
 
-    // Since slopes are 30-bit signed values representing 4 * slope_per_scanline (12.18 fixed point),
-    // and dy_h is subpixel distance, the change in x is: (setup->dx*dy * dy_h) / 16.
-    xa = (int64_t)setup->xh + ((int64_t)setup->dxhdy * dy_h) / 16;
+    // Triangle edge slopes are expressed per quarter scanline. Keep the left/right
+    // identity from the flip bit; swapping edges breaks valid right-major triangles.
+    xh = (int64_t)setup->xh + ((int64_t)setup->dxhdy * dy_h) / 4;
     if (y_center < (int64_t)setup->ym) {
-        int64_t dy_m = y_center - (int64_t)setup->yh;
-        xb = (int64_t)setup->xm + ((int64_t)setup->dxmdy * dy_m) / 16;
+        xl = (int64_t)setup->xm + ((int64_t)setup->dxmdy * dy_h) / 4;
     } else {
         int64_t dy_l = y_center - (int64_t)setup->ym;
-        xb = (int64_t)setup->xl + ((int64_t)setup->dxldy * dy_l) / 16;
-    }
-
-    if (xb < xa) {
-        const int64_t tmp = xa;
-        xa = xb;
-        xb = tmp;
+        xl = (int64_t)setup->xl + ((int64_t)setup->dxldy * dy_l) / 4;
     }
 
     span->y = y;
-    span->x0 = fixed_ceil_16(xa);
-    span->x1 = fixed_ceil_16(xb) - 1;
+    if (setup->flip) {
+        span->x0 = fixed_ceil_16(xh);
+        span->x1 = fixed_ceil_16(xl) - 1;
+    } else {
+        span->x0 = fixed_ceil_16(xl);
+        span->x1 = fixed_ceil_16(xh) - 1;
+    }
     return span->x0 <= span->x1;
 }
 

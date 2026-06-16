@@ -47,14 +47,46 @@ static rdp_color shade_base_color(const raster_shade_setup *shade)
     };
 }
 
-static rdp_color shade_interpolated_color(const raster_decoded_triangle *decoded, int64_t dx_fixed, int64_t dy_fixed)
+static int32_t interpolate_attribute(const raster_decoded_triangle *decoded,
+                                     int32_t base,
+                                     int32_t ddx,
+                                     int32_t dde,
+                                     int32_t ddy,
+                                     int x,
+                                     int y)
+{
+    const bool sign_dxhdy = decoded->position.dxhdy < 0;
+    const bool do_offset = sign_dxhdy == decoded->position.flip;
+    const int y_base = decoded->position.yh >> 2;
+    const int dy = y - y_base;
+    int64_t xh = (int64_t)decoded->position.xh + ((int64_t)dy * (int64_t)decoded->position.dxhdy);
+    int32_t diff = 0;
+
+    if (do_offset) {
+        const int32_t ddeh = dde & ~0x1ff;
+        const int32_t ddyh = ddy & ~0x1ff;
+        xh += (int64_t)3 * (int64_t)decoded->position.dxhdy / 4;
+        diff = ddeh - (ddeh >> 2) - ddyh + (ddyh >> 2);
+    }
+
+    const int base_x = (int)(xh >> 16);
+    const int xfrac = (int)((xh >> 8) & 0xff);
+    int64_t value = (int64_t)base + (int64_t)dde * dy;
+    value = ((value & ~0x1ffll) + diff - (int64_t)xfrac * ((ddx >> 8) & ~1)) & ~0x3ffll;
+    value += (int64_t)(ddx & ~0x1f) * (int64_t)(x - base_x);
+    if (value < INT32_MIN) return INT32_MIN;
+    if (value > INT32_MAX) return INT32_MAX;
+    return (int32_t)value;
+}
+
+static rdp_color shade_interpolated_color(const raster_decoded_triangle *decoded, int x, int y)
 {
     raster_shade_setup shade = decoded->shade;
 
-    shade.r = (int32_t)((int64_t)shade.r + ((int64_t)shade.drdx * dx_fixed + (int64_t)shade.drdy * dy_fixed) / 65536);
-    shade.g = (int32_t)((int64_t)shade.g + ((int64_t)shade.dgdx * dx_fixed + (int64_t)shade.dgdy * dy_fixed) / 65536);
-    shade.b = (int32_t)((int64_t)shade.b + ((int64_t)shade.dbdx * dx_fixed + (int64_t)shade.dbdy * dy_fixed) / 65536);
-    shade.a = (int32_t)((int64_t)shade.a + ((int64_t)shade.dadx * dx_fixed + (int64_t)shade.dady * dy_fixed) / 65536);
+    shade.r = interpolate_attribute(decoded, shade.r, shade.drdx, shade.drde, shade.drdy, x, y);
+    shade.g = interpolate_attribute(decoded, shade.g, shade.dgdx, shade.dgde, shade.dgdy, x, y);
+    shade.b = interpolate_attribute(decoded, shade.b, shade.dbdx, shade.dbde, shade.dbdy, x, y);
+    shade.a = interpolate_attribute(decoded, shade.a, shade.dadx, shade.dade, shade.dady, x, y);
 
     return shade_base_color(&shade);
 }
@@ -125,6 +157,8 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
                                  const rdp_state *state,
                                  int64_t dx_fixed,
                                  int64_t dy_fixed,
+                                 int x,
+                                 int y,
                                  const rdp_tile_bounds *bounds,
                                  rdp_color *color)
 {
@@ -150,7 +184,7 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
                 
                 const bool needs_shade = state->combiner_needs_shade;
                 if (decoded->has_shade && needs_shade) {
-                    shade = shade_interpolated_color(decoded, dx_fixed, dy_fixed);
+                    shade = shade_interpolated_color(decoded, x, y);
                 }
                 
                 const pipeline_inputs inputs = { .shade = shade, .texel0 = texel0, .primitive = state->primitive_color };
@@ -164,7 +198,7 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
     }
 
     if (decoded->has_shade) {
-        *color = shade_interpolated_color(decoded, dx_fixed, dy_fixed);
+        *color = shade_interpolated_color(decoded, x, y);
         return true;
     }
 
@@ -198,7 +232,7 @@ sr_result pipeline_process_triangle_pixel(sr_memory *memory,
         return framebuffer_write_fill_pixel(memory, state, (uint32_t)x, (uint32_t)y);
     } else {
         rdp_color color;
-        if (triangle_pixel_color(decoded, tmem, state, dx_fixed, dy_fixed, bounds, &color)) {
+        if (triangle_pixel_color(decoded, tmem, state, dx_fixed, dy_fixed, x, y, bounds, &color)) {
             return framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y, color);
         }
     }
