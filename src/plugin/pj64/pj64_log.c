@@ -1,5 +1,7 @@
 #include "pj64_log.h"
 
+#if SOFTRDP_ENABLE_LOG
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <time.h>
@@ -67,3 +69,5 @@ void pj64_log_printf(const char *fmt, ...)
     g_log_lines++;
     fflush(g_log);
 }
+
+#endif

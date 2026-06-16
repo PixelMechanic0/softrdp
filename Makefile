@@ -11,6 +11,8 @@ PJ64_CC ?= i686-w64-mingw32-gcc
 
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c17 -Wall -Wextra -Wpedantic -MMD -MP -Isrc
+SOFTRDP_LOG ?= 0
+CFLAGS += -DSOFTRDP_ENABLE_LOG=$(SOFTRDP_LOG)
 LDFLAGS ?=
 PLUGIN_LIBS := -lopengl32 -lgdi32 -luser32
 
@@ -37,9 +39,6 @@ PRESENT_OBJS := $(patsubst src/present/%.c,$(BUILD_DIR)/present_%.o,$(PRESENT_SR
 CORE32_OBJS := $(patsubst src/core/%.c,$(BUILD32_DIR)/core_%.o,$(CORE_SRCS))
 PLUGIN32_OBJS := $(patsubst src/plugin/pj64/%.c,$(BUILD32_DIR)/pj64_%.o,$(PLUGIN_SRCS))
 PRESENT32_OBJS := $(patsubst src/present/%.c,$(BUILD32_DIR)/present_%.o,$(PRESENT_SRCS))
-DEPS := $(CORE_OBJS:.o=.d) $(PLUGIN_OBJS:.o=.d) $(PRESENT_OBJS:.o=.d) $(TEST_OBJS:.o=.d) \
-	$(CORE32_OBJS:.o=.d) $(PLUGIN32_OBJS:.o=.d) $(PRESENT32_OBJS:.o=.d)
-
 .PHONY: all pj64 clean dirs dirs32
 
 all: $(BUILD_DIR)/softrdp-pj64.dll

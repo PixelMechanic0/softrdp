@@ -238,6 +238,7 @@ static bool upload_raw_cfb(vi_target target)
     return sr_present_upload_rgba8(&g_present, g_frame_pixels, target.width, target.height, target.width);
 }
 
+#if PJ64_LOG_ENABLED
 static const char *result_name(sr_result result)
 {
     switch (result) {
@@ -253,6 +254,7 @@ static const char *result_name(sr_result result)
         return "UNKNOWN";
     }
 }
+#endif
 
 static bool log_sample_u32(uint32_t count, uint32_t early_count, uint32_t interval)
 {
@@ -438,7 +440,8 @@ void PJ64_CALL ProcessDList(void)
      * emulator wait forever on bogus DP state.
      */
     g_process_dlist_calls++;
-    if (g_process_dlist_calls <= 8u || (g_process_dlist_calls % 120u) == 0u) {
+    if (PJ64_LOG_ENABLED &&
+        (g_process_dlist_calls <= 8u || (g_process_dlist_calls % 120u) == 0u)) {
         pj64_log_printf("ProcessDList ignored call=%u", g_process_dlist_calls);
     }
 }
@@ -454,9 +457,10 @@ void PJ64_CALL ProcessRDPList(void)
     if (g_context) {
         result = sr_process_rdp_list(g_context);
         stats = sr_get_debug_stats(g_context);
-        if (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
-            (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)) ||
-            stats.draw_calls_seen != g_last_logged_draws) {
+        if (PJ64_LOG_ENABLED &&
+            (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
+             (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)) ||
+             stats.draw_calls_seen != g_last_logged_draws)) {
             pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s commands=%llu draws=%llu",
                               g_process_rdp_calls,
                               result_name(result),
@@ -509,7 +513,7 @@ void PJ64_CALL UpdateScreen(void)
 
     if (!g_context || !g_present.ready || target.width == 0 ||
         target.height == 0 || !ensure_frame_storage(target.width, target.height)) {
-        if (log_sample_u32(g_update_screen_calls, 32u, 600u)) {
+        if (PJ64_LOG_ENABLED && log_sample_u32(g_update_screen_calls, 32u, 600u)) {
             pj64_log_printf("UpdateScreen call=%u skipped context=%d present=%d target=%ux%u stride=%u",
                               g_update_screen_calls,
                               g_context ? 1 : 0,
@@ -538,8 +542,9 @@ void PJ64_CALL UpdateScreen(void)
         g_uploaded_frames++;
     }
 
-    if (log_sample_u32(g_update_screen_calls, 32u, 600u) ||
-        (!uploaded && log_sample_u32(g_update_screen_calls, 128u, 120u))) {
+    if (PJ64_LOG_ENABLED &&
+        (log_sample_u32(g_update_screen_calls, 32u, 600u) ||
+         (!uploaded && log_sample_u32(g_update_screen_calls, 128u, 120u)))) {
         pj64_log_printf("UpdateScreen call=%u result=%s fb_valid=%d uploaded=%d vi_status=%08x origin=%08x width=%u target=%ux%u stride=%u frames=%u",
                           g_update_screen_calls,
                           result_name(result),
