@@ -233,7 +233,6 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
     if (decoded->has_texture) {
         const bool needs_texel0 = state && state->combiner_needs_texel0;
         if (needs_texel0) {
-            uint16_t texel;
             int32_t s_fixed = texture_interpolated_value(decoded->texture.s, decoded->texture.dsdx, decoded->texture.dsdy, dx_fixed, dy_fixed);
             int32_t t_fixed = texture_interpolated_value(decoded->texture.t, decoded->texture.dtdx, decoded->texture.dtdy, dx_fixed, dy_fixed);
 
@@ -246,8 +245,8 @@ static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
             const uint32_t s = texture_coord_to_texel(s_fixed);
             const uint32_t t = texture_coord_to_texel(t_fixed);
 
-            if (tmem_sample_rgba5551(tmem, state, decoded->position.tile & 7u, s, t, bounds, &texel)) {
-                rdp_color texel0 = pipeline_rgba5551_to_color(texel);
+            rdp_color texel0;
+            if (tmem_sample_color(tmem, state, decoded->position.tile & 7u, s, t, bounds, &texel0)) {
                 rdp_color shade = {0, 0, 0, 255};
                 
                 const bool needs_shade = state->combiner_needs_shade;
@@ -362,7 +361,6 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
                 const bool needs_texel0 = state && state->combiner_needs_texel0;
                 bool wrote_color = false;
                 if (needs_texel0) {
-                    uint16_t texel;
                     int32_t s_fixed = span.s_fixed;
                     int32_t t_fixed = span.t_fixed;
                     if (state->other_modes.perspective) {
@@ -370,11 +368,11 @@ sr_result pipeline_process_triangle_span(sr_memory *memory,
                         t_fixed = perspective_divide_coord(t_fixed, span.w_fixed);
                     }
 
-                    if (tmem_sample_rgba5551(tmem, state, decoded->position.tile & 7u,
-                                             texture_coord_to_texel(s_fixed),
-                                             texture_coord_to_texel(t_fixed),
-                                             bounds, &texel)) {
-                        rdp_color texel0 = pipeline_rgba5551_to_color(texel);
+                    rdp_color texel0;
+                    if (tmem_sample_color(tmem, state, decoded->position.tile & 7u,
+                                          texture_coord_to_texel(s_fixed),
+                                          texture_coord_to_texel(t_fixed),
+                                          bounds, &texel0)) {
                         rdp_color color;
                         if (decoded->has_shade && state->combiner_needs_shade) {
                             const rdp_color shade = shade_base_color(&span.shade);
@@ -434,13 +432,13 @@ sr_result pipeline_process_rect_pixel(sr_memory *memory,
         return framebuffer_write_color(memory, state, x, y, state->primitive_color);
     }
 
-    uint16_t texel;
-    if (!tmem_sample_rgba5551(tmem, state, tile_index, s, t, bounds, &texel)) {
+    rdp_color texel0;
+    if (!tmem_sample_color(tmem, state, tile_index, s, t, bounds, &texel0)) {
         return SR_ERROR_INVALID_ARGUMENT;
     }
 
     pipeline_inputs inputs = {
-        .texel0 = pipeline_rgba5551_to_color(texel),
+        .texel0 = texel0,
         .primitive = state->primitive_color
     };
     pipeline_outputs outputs = pipeline_shade_pixel(state, &inputs);

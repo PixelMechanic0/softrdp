@@ -15,12 +15,12 @@ void tmem_init(tmem_state *tmem)
     memset(tmem, 0, sizeof(*tmem));
 }
 
-static bool texture_state_supports_rgba16(const rdp_state *state, const rdp_tile *tile)
+static bool texture_state_supports_rgba(const rdp_state *state, const rdp_tile *tile)
 {
     return state->texture_image.format == RDP_FORMAT_RGBA &&
-           state->texture_image.size == RDP_SIZE_16BPP &&
            tile->format == RDP_FORMAT_RGBA &&
-           tile->size == RDP_SIZE_16BPP;
+           state->texture_image.size == tile->size &&
+           (tile->size == RDP_SIZE_16BPP || tile->size == RDP_SIZE_32BPP);
 }
 
 static void record_loaded_tile(tmem_state *tmem,
@@ -158,6 +158,45 @@ static sr_result load_rgba16_block(tmem_state *tmem, sr_memory *memory, const rd
     return SR_OK;
 }
 
+static sr_result load_rgba32_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_tile *tile, const rdp_command *cmd)
+{
+    const uint32_t tile_index = cmd->decoded.load.tile_index;
+    const uint32_t sl = cmd->decoded.load.sl >> 2;
+    const uint32_t tl = cmd->decoded.load.tl >> 2;
+    const uint32_t sh = cmd->decoded.load.sh >> 2;
+    const uint32_t th = cmd->decoded.load.th >> 2;
+
+    if (sh < sl || th < tl) {
+        return SR_ERROR_INVALID_ARGUMENT;
+    }
+
+    const uint32_t width = sh - sl + 1u;
+    const uint32_t height = th - tl + 1u;
+    const uint32_t stride = tile->line ? tile->line : tmem_align_row_stride(width * 2u);
+
+    for (uint32_t y = 0; y < height; y++) {
+        for (uint32_t x = 0; x < width; x++) {
+            uint32_t texel;
+            tmem_texel_address dst;
+            const uint32_t src_pixel = (tl + y) * state->texture_image.width + (sl + x);
+            const uint32_t src_addr = state->texture_image.address + src_pixel * 4u;
+
+            if (!sr_memory_read_be32(memory, src_addr, &texel)) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
+
+            if (!tmem_resolve_rgba32_address_raw(tile, stride, x, y, &dst) ||
+                !tmem_write_be16(tmem, dst.byte, (uint16_t)(texel >> 16)) ||
+                !tmem_write_be16(tmem, dst.byte2, (uint16_t)texel)) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
+        }
+    }
+
+    record_loaded_tile(tmem, tile_index, width, height, stride, sl, tl, sh, th);
+    return SR_OK;
+}
+
 static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd)
 {
     if (!tmem || !memory || !state || !cmd) {
@@ -167,12 +206,19 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rd
     const uint32_t tile_index = cmd->decoded.load.tile_index;
     const rdp_tile *tile = &state->tiles[tile_index];
 
-    if (!texture_state_supports_rgba16(state, tile)) {
+    if (!texture_state_supports_rgba(state, tile)) {
         return SR_ERROR_UNSUPPORTED;
     }
 
     if (cmd->id == RDP_CMD_LOAD_BLOCK) {
+        if (tile->size != RDP_SIZE_16BPP) {
+            return SR_ERROR_UNSUPPORTED;
+        }
         return load_rgba16_block(tmem, memory, state, tile, cmd);
+    }
+
+    if (tile->size == RDP_SIZE_32BPP) {
+        return load_rgba32_tile(tmem, memory, state, tile, cmd);
     }
 
     return load_rgba16_tile(tmem, memory, state, tile, cmd);
