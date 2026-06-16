@@ -23,13 +23,17 @@ sr_result pipeline_process_triangle_pixel(sr_memory *memory,
                                           const raster_decoded_triangle *decoded,
                                           int x, int y,
                                           int origin_x, int origin_y,
-                                          bool fill_mode);
+                                          bool fill_mode,
+                                          const rdp_tile_bounds *bounds);
 
 sr_result pipeline_process_rect_pixel(sr_memory *memory,
                                       tmem_state *tmem,
                                       const rdp_state *state,
                                       uint32_t tile_index,
                                       uint32_t s, uint32_t t,
-                                      uint32_t x, uint32_t y);
+                                      uint32_t x, uint32_t y,
+                                      const rdp_tile_bounds *bounds);
+
+void pipeline_resolve_tile_bounds(const rdp_state *state, const tmem_state *tmem, uint32_t tile_index, rdp_tile_bounds *bounds);
 
 #endif

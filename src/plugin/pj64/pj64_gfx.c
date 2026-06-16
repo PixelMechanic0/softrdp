@@ -299,6 +299,31 @@ static sr_host_interface make_host_interface(GFX_INFO *gfx)
     return host;
 }
 
+static void ensure_window_size(HWND hwnd)
+{
+#ifdef _WIN32
+    if (!hwnd) {
+        return;
+    }
+    RECT rect;
+    if (GetClientRect(hwnd, &rect)) {
+        int width = rect.right - rect.left;
+        int height = rect.bottom - rect.top;
+        if (width != 800 || height != 600) {
+            RECT wr = {0, 0, 800, 600};
+            DWORD style = (DWORD)GetWindowLongA(hwnd, GWL_STYLE);
+            DWORD ex_style = (DWORD)GetWindowLongA(hwnd, GWL_EXSTYLE);
+            BOOL menu = (GetMenu(hwnd) != NULL);
+            AdjustWindowRectEx(&wr, style, menu, ex_style);
+            SetWindowPos(hwnd, NULL, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+#else
+    (void)hwnd;
+#endif
+}
+
 static bool start_runtime(void)
 {
     sr_host_interface host;
@@ -306,6 +331,8 @@ static bool start_runtime(void)
     if (g_runtime_started) {
         return true;
     }
+
+    ensure_window_size(g_gfx.hWnd);
 
     pj64_log_open();
     pj64_log_printf("RomOpen/start_runtime hwnd=%p swapped=%d rdram=%p dmem=%p",
@@ -474,6 +501,8 @@ void PJ64_CALL UpdateScreen(void)
     sr_framebuffer fb;
     sr_result result;
     bool uploaded = false;
+
+    ensure_window_size(g_gfx.hWnd);
 
     (void)start_runtime();
     g_update_screen_calls++;

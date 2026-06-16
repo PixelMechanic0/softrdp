@@ -263,6 +263,11 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         return SR_OK;
     }
 
+    rdp_tile_bounds bounds = {0};
+    if (decoded.has_texture) {
+        pipeline_resolve_tile_bounds(state, tmem, decoded.position.tile & 7u, &bounds);
+    }
+
     for (int y = yh; y < yl; y++) {
         raster_span span;
         if (!triangle_span_for_y(&decoded.position, y, &span)) {
@@ -273,7 +278,7 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         }
 
         for (int x = span.x0; x <= span.x1; x++) {
-            result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, shade_origin_x, shade_origin_y, fill_triangle);
+            result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, shade_origin_x, shade_origin_y, fill_triangle, &bounds);
             if (result != SR_OK) {
                 return result;
             }
@@ -306,6 +311,9 @@ static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, r
         return SR_OK;
     }
 
+    rdp_tile_bounds bounds = {0};
+    pipeline_resolve_tile_bounds(state, tmem, tile_index, &bounds);
+
     for (uint32_t y = rect.y0; y <= rect.y1; y++) {
         for (uint32_t x = rect.x0; x <= rect.x1; x++) {
             const int32_t dx = (int32_t)(x - base_x);
@@ -315,7 +323,7 @@ static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, r
             const uint32_t s = s_fixed < 0 ? 0u : (uint32_t)s_fixed >> 5;
             const uint32_t t = t_fixed < 0 ? 0u : (uint32_t)t_fixed >> 5;
 
-            sr_result result = pipeline_process_rect_pixel(memory, tmem, state, tile_index, s, t, x, y);
+            sr_result result = pipeline_process_rect_pixel(memory, tmem, state, tile_index, s, t, x, y, &bounds);
             if (result != SR_OK) {
                 return result;
             }

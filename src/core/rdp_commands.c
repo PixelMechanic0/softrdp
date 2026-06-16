@@ -309,6 +309,9 @@ sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *st
                    d->alpha_muladd0 == 1u && d->alpha_mulsub0 == 7u && d->alpha_mul0 == 4u && d->alpha_add0 == 7u) {
             state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0_SHADE;
         }
+        state->combiner_needs_texel0 = (state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0 ||
+                                        state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE);
+        state->combiner_needs_shade = (state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE);
         return SR_OK;
     }
 

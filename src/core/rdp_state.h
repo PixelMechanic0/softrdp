@@ -90,6 +90,13 @@ typedef enum rdp_simple_combiner {
     RDP_SIMPLE_COMBINER_TEXEL0_SHADE = 2
 } rdp_simple_combiner;
 
+typedef struct rdp_tile_bounds {
+    uint32_t sl;
+    uint32_t tl;
+    uint32_t sh;
+    uint32_t th;
+} rdp_tile_bounds;
+
 typedef struct rdp_state {
     rdp_image color_image;
     rdp_image texture_image;
@@ -109,6 +116,8 @@ typedef struct rdp_state {
     uint16_t scissor_y1;
     rdp_other_modes other_modes;
     rdp_simple_combiner simple_combiner;
+    bool combiner_needs_texel0;
+    bool combiner_needs_shade;
     rdp_tile tiles[8];
     uint64_t commands_seen;
     uint64_t draw_calls_seen;

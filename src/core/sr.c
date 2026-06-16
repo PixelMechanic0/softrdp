@@ -87,6 +87,8 @@ static void rdp_state_init(rdp_state *state)
     state->other_modes.bilerp0 = true;
     state->other_modes.bilerp1 = true;
     state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
+    state->combiner_needs_texel0 = true;
+    state->combiner_needs_shade = false;
 }
 
 sr_context *sr_create(const sr_host_interface *host)
