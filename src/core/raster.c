@@ -22,11 +22,11 @@ static raster_triangle_setup decode_triangle_setup(const rdp_command *cmd)
     setup.ym = (int16_t)sign_extend((w[1] >> 16) & 0x3fffu, 14);
     setup.yh = (int16_t)sign_extend(w[1] & 0x3fffu, 14);
     setup.xl = sign_extend(w[2] & 0x0fffffffu, 28);
-    setup.dxldy = sign_extend((w[3] >> 2) & 0x0fffffffu, 28);
+    setup.dxldy = sign_extend(w[3] & 0x3fffffffu, 30);
     setup.xh = sign_extend(w[4] & 0x0fffffffu, 28);
-    setup.dxhdy = sign_extend((w[5] >> 2) & 0x0fffffffu, 28);
+    setup.dxhdy = sign_extend(w[5] & 0x3fffffffu, 30);
     setup.xm = sign_extend(w[6] & 0x0fffffffu, 28);
-    setup.dxmdy = sign_extend((w[7] >> 2) & 0x0fffffffu, 28);
+    setup.dxmdy = sign_extend(w[7] & 0x3fffffffu, 30);
 
     return setup;
 }
@@ -113,10 +113,6 @@ static int fixed_ceil_div(int64_t value, int64_t scale)
     return -fixed_floor_div(-value, scale);
 }
 
-static int fixed_floor_2(int32_t value)
-{
-    return fixed_floor_div(value, 4);
-}
 
 static int fixed_ceil_16(int64_t value)
 {
@@ -153,14 +149,20 @@ static bool triangle_span_for_y(const raster_triangle_setup *setup, int y, raste
 {
     int64_t xa;
     int64_t xb;
-    const int yh = fixed_floor_2(setup->yh);
-    const int ym = fixed_floor_2(setup->ym);
 
-    xa = (int64_t)setup->xh + (int64_t)setup->dxhdy * (int64_t)(y - yh);
-    if (y < ym) {
-        xb = (int64_t)setup->xm + (int64_t)setup->dxmdy * (int64_t)(y - yh);
+    // Center of scanline y is y * 4 + 2 subpixels
+    int64_t y_center = (int64_t)y * 4 + 2;
+    int64_t dy_h = y_center - (int64_t)setup->yh;
+
+    // Since slopes are 30-bit signed values representing 4 * slope_per_scanline (12.18 fixed point),
+    // and dy_h is subpixel distance, the change in x is: (setup->dx*dy * dy_h) / 16.
+    xa = (int64_t)setup->xh + ((int64_t)setup->dxhdy * dy_h) / 16;
+    if (y_center < (int64_t)setup->ym) {
+        int64_t dy_m = y_center - (int64_t)setup->yh;
+        xb = (int64_t)setup->xm + ((int64_t)setup->dxmdy * dy_m) / 16;
     } else {
-        xb = (int64_t)setup->xl + (int64_t)setup->dxldy * (int64_t)(y - ym);
+        int64_t dy_l = y_center - (int64_t)setup->ym;
+        xb = (int64_t)setup->xl + ((int64_t)setup->dxldy * dy_l) / 16;
     }
 
     if (xb < xa) {
@@ -253,11 +255,9 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         return SR_OK;
     }
 
-    const int yh = fixed_floor_2(decoded.position.yh);
-    const int yl = fixed_floor_2(decoded.position.yl);
+    const int yh = fixed_ceil_div(decoded.position.yh - 2, 4);
+    const int yl = fixed_ceil_div(decoded.position.yl - 2, 4);
     const bool fill_triangle = cmd->id == RDP_CMD_FILL_TRIANGLE;
-    const int shade_origin_x = fixed_ceil_16(decoded.position.xh);
-    const int shade_origin_y = yh;
 
     if (yl <= yh) {
         return SR_OK;
@@ -278,7 +278,7 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         }
 
         for (int x = span.x0; x <= span.x1; x++) {
-            result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, shade_origin_x, shade_origin_y, fill_triangle, &bounds);
+            result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, fill_triangle, &bounds);
             if (result != SR_OK) {
                 return result;
             }

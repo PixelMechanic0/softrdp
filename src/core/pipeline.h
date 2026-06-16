@@ -22,7 +22,6 @@ sr_result pipeline_process_triangle_pixel(sr_memory *memory,
                                           const rdp_state *state,
                                           const raster_decoded_triangle *decoded,
                                           int x, int y,
-                                          int origin_x, int origin_y,
                                           bool fill_mode,
                                           const rdp_tile_bounds *bounds);
 
