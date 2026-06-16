@@ -18,7 +18,6 @@ CORE_SRCS := \
 	src/core/sr.c \
 	src/core/rdp_commands.c \
 	src/core/rdp_memory.c \
-	src/core/rdp_state.c \
 	src/core/framebuffer.c \
 	src/core/raster.c \
 	src/core/tmem.c \

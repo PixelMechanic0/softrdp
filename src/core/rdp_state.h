@@ -114,6 +114,33 @@ typedef struct rdp_state {
     uint64_t draw_calls_seen;
 } rdp_state;
 
-void rdp_state_init(rdp_state *state);
+static inline uint8_t expand_5_to_8(uint32_t value)
+{
+    value &= 0x1fu;
+    return (uint8_t)((value << 3) | (value >> 2));
+}
+
+static inline uint8_t shrink_8_to_5(uint8_t value)
+{
+    return (uint8_t)(value >> 3);
+}
+
+static inline rdp_color pipeline_rgba5551_to_color(uint16_t value)
+{
+    return (rdp_color){ expand_5_to_8(value >> 11), expand_5_to_8(value >> 6), expand_5_to_8(value >> 1), (value & 1u) ? 255u : 0u };
+}
+
+static inline uint16_t pipeline_color_to_rgba5551(rdp_color color)
+{
+    return (uint16_t)(((uint16_t)shrink_8_to_5(color.r) << 11) |
+                      ((uint16_t)shrink_8_to_5(color.g) << 6) |
+                      ((uint16_t)shrink_8_to_5(color.b) << 1) |
+                      (color.a >= 128 ? 1u : 0u));
+}
+
+static inline uint32_t pipeline_color_to_rgba8888(rdp_color color)
+{
+    return ((uint32_t)color.r << 24) | ((uint32_t)color.g << 16) | ((uint32_t)color.b << 8) | (uint32_t)color.a;
+}
 
 #endif

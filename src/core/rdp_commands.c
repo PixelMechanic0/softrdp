@@ -5,55 +5,31 @@
 
 static rdp_color color_from_word(uint32_t word)
 {
-    rdp_color color;
-    color.r = (uint8_t)(word >> 24);
-    color.g = (uint8_t)(word >> 16);
-    color.b = (uint8_t)(word >> 8);
-    color.a = (uint8_t)word;
-    return color;
+    return (rdp_color){ (uint8_t)(word >> 24), (uint8_t)(word >> 16), (uint8_t)(word >> 8), (uint8_t)word };
 }
 
 uint8_t rdp_command_word_count(rdp_command_id id)
 {
     static const uint8_t lengths[64] = {
-        [RDP_CMD_NO_OP] = 2,
-        [RDP_CMD_FILL_TRIANGLE] = 8,
-        [RDP_CMD_FILL_ZBUFFER_TRIANGLE] = 12,
-        [RDP_CMD_TEXTURE_TRIANGLE] = 24,
-        [RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE] = 28,
-        [RDP_CMD_SHADE_TRIANGLE] = 24,
-        [RDP_CMD_SHADE_ZBUFFER_TRIANGLE] = 28,
-        [RDP_CMD_SHADE_TEXTURE_TRIANGLE] = 40,
-        [RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE] = 44,
-        [RDP_CMD_TEXTURE_RECTANGLE] = 4,
-        [RDP_CMD_TEXTURE_RECTANGLE_FLIP] = 4,
-        [RDP_CMD_SYNC_LOAD] = 2,
-        [RDP_CMD_SYNC_PIPE] = 2,
-        [RDP_CMD_SYNC_TILE] = 2,
-        [RDP_CMD_SYNC_FULL] = 2,
-        [RDP_CMD_SET_KEY_GB] = 2,
-        [RDP_CMD_SET_KEY_R] = 2,
-        [RDP_CMD_SET_CONVERT] = 2,
-        [RDP_CMD_SET_SCISSOR] = 2,
-        [RDP_CMD_SET_PRIM_DEPTH] = 2,
-        [RDP_CMD_SET_OTHER_MODES] = 2,
-        [RDP_CMD_LOAD_TLUT] = 2,
-        [RDP_CMD_SET_TILE_SIZE] = 2,
-        [RDP_CMD_LOAD_BLOCK] = 2,
-        [RDP_CMD_LOAD_TILE] = 2,
-        [RDP_CMD_SET_TILE] = 2,
-        [RDP_CMD_FILL_RECTANGLE] = 2,
-        [RDP_CMD_SET_FILL_COLOR] = 2,
-        [RDP_CMD_SET_FOG_COLOR] = 2,
-        [RDP_CMD_SET_BLEND_COLOR] = 2,
-        [RDP_CMD_SET_PRIM_COLOR] = 2,
-        [RDP_CMD_SET_ENV_COLOR] = 2,
-        [RDP_CMD_SET_COMBINE] = 2,
-        [RDP_CMD_SET_TEXTURE_IMAGE] = 2,
-        [RDP_CMD_SET_MASK_IMAGE] = 2,
-        [RDP_CMD_SET_COLOR_IMAGE] = 2
+        [RDP_CMD_NO_OP] = 2,                          [RDP_CMD_SYNC_LOAD] = 2,
+        [RDP_CMD_FILL_TRIANGLE] = 8,                  [RDP_CMD_SYNC_PIPE] = 2,
+        [RDP_CMD_FILL_ZBUFFER_TRIANGLE] = 12,         [RDP_CMD_SYNC_TILE] = 2,
+        [RDP_CMD_TEXTURE_TRIANGLE] = 24,              [RDP_CMD_SYNC_FULL] = 2,
+        [RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE] = 28,      [RDP_CMD_SET_KEY_GB] = 2,
+        [RDP_CMD_SHADE_TRIANGLE] = 24,                [RDP_CMD_SET_KEY_R] = 2,
+        [RDP_CMD_SHADE_ZBUFFER_TRIANGLE] = 28,        [RDP_CMD_SET_CONVERT] = 2,
+        [RDP_CMD_SHADE_TEXTURE_TRIANGLE] = 40,        [RDP_CMD_SET_SCISSOR] = 2,
+        [RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE] = 44,[RDP_CMD_SET_PRIM_DEPTH] = 2,
+        [RDP_CMD_TEXTURE_RECTANGLE] = 4,              [RDP_CMD_SET_OTHER_MODES] = 2,
+        [RDP_CMD_TEXTURE_RECTANGLE_FLIP] = 4,         [RDP_CMD_LOAD_TLUT] = 2,
+        [RDP_CMD_SET_TILE_SIZE] = 2,                  [RDP_CMD_SET_ENV_COLOR] = 2,
+        [RDP_CMD_LOAD_BLOCK] = 2,                     [RDP_CMD_SET_COMBINE] = 2,
+        [RDP_CMD_LOAD_TILE] = 2,                      [RDP_CMD_SET_TEXTURE_IMAGE] = 2,
+        [RDP_CMD_SET_TILE] = 2,                       [RDP_CMD_SET_MASK_IMAGE] = 2,
+        [RDP_CMD_FILL_RECTANGLE] = 2,                 [RDP_CMD_SET_COLOR_IMAGE] = 2,
+        [RDP_CMD_SET_FILL_COLOR] = 2,                 [RDP_CMD_SET_FOG_COLOR] = 2,
+        [RDP_CMD_SET_BLEND_COLOR] = 2,                [RDP_CMD_SET_PRIM_COLOR] = 2
     };
-
     return id < 64 ? lengths[id] : 0;
 }
 
@@ -70,58 +46,37 @@ bool rdp_command_is_draw(rdp_command_id id)
     case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:
     case RDP_CMD_TEXTURE_RECTANGLE:
     case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
-    case RDP_CMD_FILL_RECTANGLE:
-        return true;
-    default:
-        return false;
+    case RDP_CMD_FILL_RECTANGLE:                  return true;
+    default:                                      return false;
     }
 }
 
 const char *rdp_command_name(rdp_command_id id)
 {
     static const char *names[64] = {
-        [RDP_CMD_NO_OP] = "NO_OP",
-        [RDP_CMD_FILL_TRIANGLE] = "FILL_TRIANGLE",
-        [RDP_CMD_FILL_ZBUFFER_TRIANGLE] = "FILL_ZBUFFER_TRIANGLE",
-        [RDP_CMD_TEXTURE_TRIANGLE] = "TEXTURE_TRIANGLE",
-        [RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE] = "TEXTURE_ZBUFFER_TRIANGLE",
-        [RDP_CMD_SHADE_TRIANGLE] = "SHADE_TRIANGLE",
-        [RDP_CMD_SHADE_ZBUFFER_TRIANGLE] = "SHADE_ZBUFFER_TRIANGLE",
-        [RDP_CMD_SHADE_TEXTURE_TRIANGLE] = "SHADE_TEXTURE_TRIANGLE",
-        [RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE] = "SHADE_TEXTURE_ZBUFFER_TRIANGLE",
-        [RDP_CMD_TEXTURE_RECTANGLE] = "TEXTURE_RECTANGLE",
-        [RDP_CMD_TEXTURE_RECTANGLE_FLIP] = "TEXTURE_RECTANGLE_FLIP",
-        [RDP_CMD_SYNC_LOAD] = "SYNC_LOAD",
-        [RDP_CMD_SYNC_PIPE] = "SYNC_PIPE",
-        [RDP_CMD_SYNC_TILE] = "SYNC_TILE",
-        [RDP_CMD_SYNC_FULL] = "SYNC_FULL",
-        [RDP_CMD_SET_KEY_GB] = "SET_KEY_GB",
-        [RDP_CMD_SET_KEY_R] = "SET_KEY_R",
-        [RDP_CMD_SET_CONVERT] = "SET_CONVERT",
-        [RDP_CMD_SET_SCISSOR] = "SET_SCISSOR",
-        [RDP_CMD_SET_PRIM_DEPTH] = "SET_PRIM_DEPTH",
-        [RDP_CMD_SET_OTHER_MODES] = "SET_OTHER_MODES",
-        [RDP_CMD_LOAD_TLUT] = "LOAD_TLUT",
-        [RDP_CMD_SET_TILE_SIZE] = "SET_TILE_SIZE",
-        [RDP_CMD_LOAD_BLOCK] = "LOAD_BLOCK",
-        [RDP_CMD_LOAD_TILE] = "LOAD_TILE",
-        [RDP_CMD_SET_TILE] = "SET_TILE",
-        [RDP_CMD_FILL_RECTANGLE] = "FILL_RECTANGLE",
-        [RDP_CMD_SET_FILL_COLOR] = "SET_FILL_COLOR",
-        [RDP_CMD_SET_FOG_COLOR] = "SET_FOG_COLOR",
-        [RDP_CMD_SET_BLEND_COLOR] = "SET_BLEND_COLOR",
-        [RDP_CMD_SET_PRIM_COLOR] = "SET_PRIM_COLOR",
-        [RDP_CMD_SET_ENV_COLOR] = "SET_ENV_COLOR",
-        [RDP_CMD_SET_COMBINE] = "SET_COMBINE",
-        [RDP_CMD_SET_TEXTURE_IMAGE] = "SET_TEXTURE_IMAGE",
-        [RDP_CMD_SET_MASK_IMAGE] = "SET_MASK_IMAGE",
-        [RDP_CMD_SET_COLOR_IMAGE] = "SET_COLOR_IMAGE"
+        [RDP_CMD_NO_OP] = "NO_OP", [RDP_CMD_FILL_TRIANGLE] = "FILL_TRIANGLE",
+        [RDP_CMD_FILL_ZBUFFER_TRIANGLE] = "FILL_ZBUFFER_TRIANGLE", [RDP_CMD_TEXTURE_TRIANGLE] = "TEXTURE_TRIANGLE",
+        [RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE] = "TEXTURE_ZBUFFER_TRIANGLE", [RDP_CMD_SHADE_TRIANGLE] = "SHADE_TRIANGLE",
+        [RDP_CMD_SHADE_ZBUFFER_TRIANGLE] = "SHADE_ZBUFFER_TRIANGLE", [RDP_CMD_SHADE_TEXTURE_TRIANGLE] = "SHADE_TEXTURE_TRIANGLE",
+        [RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE] = "SHADE_TEXTURE_ZBUFFER_TRIANGLE", [RDP_CMD_TEXTURE_RECTANGLE] = "TEXTURE_RECTANGLE",
+        [RDP_CMD_TEXTURE_RECTANGLE_FLIP] = "TEXTURE_RECTANGLE_FLIP", [RDP_CMD_SYNC_LOAD] = "SYNC_LOAD",
+        [RDP_CMD_SYNC_PIPE] = "SYNC_PIPE", [RDP_CMD_SYNC_TILE] = "SYNC_TILE",
+        [RDP_CMD_SYNC_FULL] = "SYNC_FULL", [RDP_CMD_SET_KEY_GB] = "SET_KEY_GB",
+        [RDP_CMD_SET_KEY_R] = "SET_KEY_R", [RDP_CMD_SET_CONVERT] = "SET_CONVERT",
+        [RDP_CMD_SET_SCISSOR] = "SET_SCISSOR", [RDP_CMD_SET_PRIM_DEPTH] = "SET_PRIM_DEPTH",
+        [RDP_CMD_SET_OTHER_MODES] = "SET_OTHER_MODES", [RDP_CMD_LOAD_TLUT] = "LOAD_TLUT",
+        [RDP_CMD_SET_TILE_SIZE] = "SET_TILE_SIZE", [RDP_CMD_LOAD_BLOCK] = "LOAD_BLOCK",
+        [RDP_CMD_LOAD_TILE] = "LOAD_TILE", [RDP_CMD_SET_TILE] = "SET_TILE",
+        [RDP_CMD_FILL_RECTANGLE] = "FILL_RECTANGLE", [RDP_CMD_SET_FILL_COLOR] = "SET_FILL_COLOR",
+        [RDP_CMD_SET_FOG_COLOR] = "SET_FOG_COLOR", [RDP_CMD_SET_BLEND_COLOR] = "SET_BLEND_COLOR",
+        [RDP_CMD_SET_PRIM_COLOR] = "SET_PRIM_COLOR", [RDP_CMD_SET_ENV_COLOR] = "SET_ENV_COLOR",
+        [RDP_CMD_SET_COMBINE] = "SET_COMBINE", [RDP_CMD_SET_TEXTURE_IMAGE] = "SET_TEXTURE_IMAGE",
+        [RDP_CMD_SET_MASK_IMAGE] = "SET_MASK_IMAGE", [RDP_CMD_SET_COLOR_IMAGE] = "SET_COLOR_IMAGE"
     };
-
     return id < 64 && names[id] ? names[id] : "UNKNOWN";
 }
 
-static void set_image(rdp_image *image, uint32_t w0, uint32_t w1)
+static void decode_set_image(rdp_image *image, uint32_t w0, uint32_t w1)
 {
     image->format = (rdp_texture_format)((w0 >> 21) & 7u);
     image->size = (rdp_texture_size)((w0 >> 19) & 3u);
@@ -129,7 +84,15 @@ static void set_image(rdp_image *image, uint32_t w0, uint32_t w1)
     image->address = w1 & 0x00ffffffu;
 }
 
-static void set_other_modes(rdp_other_modes *modes, uint32_t w0, uint32_t w1)
+static void decode_set_scissor(rdp_set_scissor_cmd *cmd, uint32_t w0, uint32_t w1)
+{
+    cmd->x0 = (uint16_t)((w0 >> 12) & 0xfffu);
+    cmd->y0 = (uint16_t)(w0 & 0xfffu);
+    cmd->x1 = (uint16_t)((w1 >> 12) & 0xfffu);
+    cmd->y1 = (uint16_t)(w1 & 0xfffu);
+}
+
+static void decode_set_other_modes(rdp_other_modes *modes, uint32_t w0, uint32_t w1)
 {
     modes->cycle_type = (rdp_cycle_type)((w0 >> 20) & 3u);
     modes->perspective = (w0 & (1u << 19)) != 0;
@@ -155,11 +118,9 @@ static void set_other_modes(rdp_other_modes *modes, uint32_t w0, uint32_t w1)
     modes->z_mode = (uint8_t)((w1 >> 10) & 3u);
 }
 
-static void set_tile(rdp_state *state, uint32_t w0, uint32_t w1)
+static void decode_set_tile(rdp_set_tile_cmd *tile, uint32_t w0, uint32_t w1)
 {
-    uint32_t index = (w1 >> 24) & 7u;
-    rdp_tile *tile = &state->tiles[index];
-
+    tile->tile_index = (w1 >> 24) & 7u;
     tile->tmem = (uint16_t)((w0 & 0x1ffu) << 3);
     tile->line = (uint16_t)(((w0 >> 9) & 0x1ffu) << 3);
     tile->size = (rdp_texture_size)((w0 >> 19) & 3u);
@@ -175,44 +136,110 @@ static void set_tile(rdp_state *state, uint32_t w0, uint32_t w1)
     tile->clamp_s = (uint8_t)((w1 >> 9) & 1u);
 }
 
-static void set_tile_size(rdp_state *state, uint32_t w0, uint32_t w1)
+static void decode_set_tile_size(rdp_set_tile_size_cmd *tile, uint32_t w0, uint32_t w1)
 {
-    uint32_t index = (w1 >> 24) & 7u;
-    rdp_tile *tile = &state->tiles[index];
-
+    tile->tile_index = (w1 >> 24) & 7u;
     tile->sl = (uint16_t)((w0 >> 12) & 0xfffu);
     tile->tl = (uint16_t)(w0 & 0xfffu);
     tile->sh = (uint16_t)((w1 >> 12) & 0xfffu);
     tile->th = (uint16_t)(w1 & 0xfffu);
 }
 
-static void set_combine(rdp_state *state, uint32_t w0, uint32_t w1)
+static void decode_set_combine(rdp_set_combine_cmd *combine, uint32_t w0, uint32_t w1)
 {
-    const uint32_t rgb_muladd0 = (w0 >> 20) & 0xfu;
-    const uint32_t rgb_mul0 = (w0 >> 15) & 0x1fu;
-    const uint32_t rgb_mulsub0 = (w1 >> 28) & 0xfu;
-    const uint32_t rgb_add0 = (w1 >> 15) & 0x7u;
-    const uint32_t alpha_muladd0 = (w0 >> 12) & 0x7u;
-    const uint32_t alpha_mulsub0 = (w1 >> 12) & 0x7u;
-    const uint32_t alpha_mul0 = (w0 >> 9) & 0x7u;
-    const uint32_t alpha_add0 = (w1 >> 9) & 0x7u;
+    combine->rgb_muladd0 = (w0 >> 20) & 0xfu;
+    combine->rgb_mul0 = (w0 >> 15) & 0x1fu;
+    combine->rgb_mulsub0 = (w1 >> 28) & 0xfu;
+    combine->rgb_add0 = (w1 >> 15) & 0x7u;
+    combine->alpha_muladd0 = (w0 >> 12) & 0x7u;
+    combine->alpha_mulsub0 = (w1 >> 12) & 0x7u;
+    combine->alpha_mul0 = (w0 >> 9) & 0x7u;
+    combine->alpha_add0 = (w1 >> 9) & 0x7u;
+}
 
-    state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
+static void decode_rect(rdp_rect_cmd *rect, const rdp_command *cmd)
+{
+    rect->x1 = ((cmd->words[0] >> 12) & 0xfffu) >> 2;
+    rect->y1 = (cmd->words[0] & 0xfffu) >> 2;
+    rect->x0 = ((cmd->words[1] >> 12) & 0xfffu) >> 2;
+    rect->y0 = (cmd->words[1] & 0xfffu) >> 2;
+    rect->flip = cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP;
 
-    if (rgb_muladd0 == 3u && rgb_mulsub0 == 8u && rgb_mul0 == 16u && rgb_add0 == 7u &&
-        alpha_muladd0 == 3u && alpha_mulsub0 == 7u && alpha_mul0 == 7u && alpha_add0 == 7u) {
-        state->simple_combiner = RDP_SIMPLE_COMBINER_PRIMITIVE;
-    } else if (rgb_muladd0 == 1u && rgb_mulsub0 == 8u && rgb_mul0 == 4u && rgb_add0 == 7u &&
-               alpha_muladd0 == 1u && alpha_mulsub0 == 7u && alpha_mul0 == 4u && alpha_add0 == 7u) {
-        state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0_SHADE;
+    if (cmd->id == RDP_CMD_TEXTURE_RECTANGLE || cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP) {
+        rect->tile_index = (cmd->words[1] >> 24) & 7u;
+        rect->s0 = (int16_t)(cmd->words[2] >> 16);
+        rect->t0 = (int16_t)cmd->words[2];
+        rect->dsdx = (int16_t)(cmd->words[3] >> 16);
+        rect->dtdy = (int16_t)cmd->words[3];
+    } else {
+        rect->tile_index = rect->s0 = rect->t0 = rect->dsdx = rect->dtdy = 0;
+    }
+}
+
+static void decode_load(rdp_load_cmd *load, const rdp_command *cmd)
+{
+    load->tile_index = (cmd->words[1] >> 24) & 7u;
+    load->sl = ((cmd->words[0] >> 12) & 0xfffu) >> 2;
+    load->tl = (cmd->words[0] & 0xfffu) >> 2;
+    load->sh = ((cmd->words[1] >> 12) & 0xfffu) >> 2;
+    load->th = (cmd->words[1] & 0xfffu) >> 2;
+}
+
+sr_result rdp_decode_command(rdp_command *cmd)
+{
+    if (!cmd) return SR_ERROR_INVALID_ARGUMENT;
+
+    const uint32_t w0 = cmd->words[0];
+    const uint32_t w1 = cmd->words[1];
+
+    switch (cmd->id) {
+    case RDP_CMD_NO_OP:
+    case RDP_CMD_SYNC_LOAD:
+    case RDP_CMD_SYNC_PIPE:
+    case RDP_CMD_SYNC_TILE:
+    case RDP_CMD_SYNC_FULL:
+    case RDP_CMD_SET_CONVERT:
+    case RDP_CMD_SET_KEY_GB:
+    case RDP_CMD_SET_KEY_R:                       return SR_OK;
+
+    case RDP_CMD_SET_COLOR_IMAGE:                 decode_set_image(&cmd->decoded.set_color_image, w0, w1); return SR_OK;
+    case RDP_CMD_SET_TEXTURE_IMAGE:               decode_set_image(&cmd->decoded.set_texture_image, w0, w1); return SR_OK;
+    case RDP_CMD_SET_MASK_IMAGE:                  cmd->decoded.set_mask_image.address = w1 & 0x00ffffffu; return SR_OK;
+    case RDP_CMD_SET_SCISSOR:                     decode_set_scissor(&cmd->decoded.set_scissor, w0, w1); return SR_OK;
+    case RDP_CMD_SET_OTHER_MODES:                 decode_set_other_modes(&cmd->decoded.set_other_modes, w0, w1); return SR_OK;
+    case RDP_CMD_SET_TILE:                        decode_set_tile(&cmd->decoded.set_tile, w0, w1); return SR_OK;
+    case RDP_CMD_SET_TILE_SIZE:                   decode_set_tile_size(&cmd->decoded.set_tile_size, w0, w1); return SR_OK;
+    case RDP_CMD_SET_FILL_COLOR:                  cmd->decoded.set_fill_color.fill_color = w1; return SR_OK;
+    case RDP_CMD_SET_FOG_COLOR:                   cmd->decoded.set_fog_color.color = color_from_word(w1); return SR_OK;
+    case RDP_CMD_SET_BLEND_COLOR:                 cmd->decoded.set_blend_color.color = color_from_word(w1); return SR_OK;
+    case RDP_CMD_SET_ENV_COLOR:                   cmd->decoded.set_env_color.color = color_from_word(w1); return SR_OK;
+    case RDP_CMD_SET_PRIM_COLOR:                  cmd->decoded.set_prim_color.min_lod = (uint8_t)((w0 >> 8) & 0xffu); cmd->decoded.set_prim_color.lod_fraction = (uint8_t)(w0 & 0xffu); cmd->decoded.set_prim_color.color = color_from_word(w1); return SR_OK;
+    case RDP_CMD_SET_PRIM_DEPTH:                  cmd->decoded.set_prim_depth.depth = (uint16_t)(w1 >> 16); cmd->decoded.set_prim_depth.delta_z = (uint16_t)w1; return SR_OK;
+    case RDP_CMD_SET_COMBINE:                     decode_set_combine(&cmd->decoded.set_combine, w0, w1); return SR_OK;
+
+    case RDP_CMD_FILL_TRIANGLE:
+    case RDP_CMD_FILL_ZBUFFER_TRIANGLE:
+    case RDP_CMD_TEXTURE_TRIANGLE:
+    case RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE:
+    case RDP_CMD_SHADE_TRIANGLE:
+    case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_decode_triangle(cmd, &cmd->decoded.triangle);
+
+    case RDP_CMD_TEXTURE_RECTANGLE:
+    case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
+    case RDP_CMD_FILL_RECTANGLE:                  decode_rect(&cmd->decoded.rect, cmd); return SR_OK;
+
+    case RDP_CMD_LOAD_TLUT:
+    case RDP_CMD_LOAD_BLOCK:
+    case RDP_CMD_LOAD_TILE:                       decode_load(&cmd->decoded.load, cmd); return SR_OK;
+
+    default:                                      return SR_ERROR_BAD_COMMAND;
     }
 }
 
 sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
 {
-    const uint32_t w0 = cmd->words[0];
-    const uint32_t w1 = cmd->words[1];
-
     state->commands_seen++;
     if (rdp_command_is_draw(cmd->id)) {
         state->draw_calls_seen++;
@@ -223,66 +250,37 @@ sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *st
     case RDP_CMD_SYNC_LOAD:
     case RDP_CMD_SYNC_PIPE:
     case RDP_CMD_SYNC_TILE:
-    case RDP_CMD_SYNC_FULL:
-        return SR_OK;
+    case RDP_CMD_SYNC_FULL:                       return SR_OK;
 
-    case RDP_CMD_SET_COLOR_IMAGE:
-        set_image(&state->color_image, w0, w1);
-        return SR_OK;
+    case RDP_CMD_SET_COLOR_IMAGE:                 state->color_image = cmd->decoded.set_color_image; return SR_OK;
+    case RDP_CMD_SET_TEXTURE_IMAGE:               state->texture_image = cmd->decoded.set_texture_image; return SR_OK;
+    case RDP_CMD_SET_MASK_IMAGE:                  state->depth_image_address = cmd->decoded.set_mask_image.address; return SR_OK;
+    case RDP_CMD_SET_SCISSOR:                     state->scissor_x0 = cmd->decoded.set_scissor.x0; state->scissor_y0 = cmd->decoded.set_scissor.y0; state->scissor_x1 = cmd->decoded.set_scissor.x1; state->scissor_y1 = cmd->decoded.set_scissor.y1; return SR_OK;
+    case RDP_CMD_SET_OTHER_MODES:                 state->other_modes = cmd->decoded.set_other_modes; return SR_OK;
 
-    case RDP_CMD_SET_TEXTURE_IMAGE:
-        set_image(&state->texture_image, w0, w1);
+    case RDP_CMD_SET_TILE: {
+        const rdp_set_tile_cmd *d = &cmd->decoded.set_tile;
+        rdp_tile *t = &state->tiles[d->tile_index];
+        t->tmem = d->tmem; t->line = d->line; t->size = d->size; t->format = d->format;
+        t->palette = d->palette; t->shift_t = d->shift_t; t->mask_t = d->mask_t;
+        t->mirror_t = d->mirror_t; t->clamp_t = d->clamp_t; t->shift_s = d->shift_s;
+        t->mask_s = d->mask_s; t->mirror_s = d->mirror_s; t->clamp_s = d->clamp_s;
         return SR_OK;
+    }
 
-    case RDP_CMD_SET_MASK_IMAGE:
-        state->depth_image_address = w1 & 0x00ffffffu;
+    case RDP_CMD_SET_TILE_SIZE: {
+        const rdp_set_tile_size_cmd *d = &cmd->decoded.set_tile_size;
+        rdp_tile *t = &state->tiles[d->tile_index];
+        t->sl = d->sl; t->tl = d->tl; t->sh = d->sh; t->th = d->th;
         return SR_OK;
+    }
 
-    case RDP_CMD_SET_SCISSOR:
-        state->scissor_x0 = (uint16_t)((w0 >> 12) & 0xfffu);
-        state->scissor_y0 = (uint16_t)(w0 & 0xfffu);
-        state->scissor_x1 = (uint16_t)((w1 >> 12) & 0xfffu);
-        state->scissor_y1 = (uint16_t)(w1 & 0xfffu);
-        return SR_OK;
-
-    case RDP_CMD_SET_OTHER_MODES:
-        set_other_modes(&state->other_modes, w0, w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_TILE:
-        set_tile(state, w0, w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_TILE_SIZE:
-        set_tile_size(state, w0, w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_FILL_COLOR:
-        state->fill_color = w1;
-        return SR_OK;
-
-    case RDP_CMD_SET_FOG_COLOR:
-        state->fog_color = color_from_word(w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_BLEND_COLOR:
-        state->blend_color = color_from_word(w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_ENV_COLOR:
-        state->environment_color = color_from_word(w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_PRIM_COLOR:
-        state->primitive_min_lod = (uint8_t)((w0 >> 8) & 0xffu);
-        state->primitive_lod_fraction = (uint8_t)(w0 & 0xffu);
-        state->primitive_color = color_from_word(w1);
-        return SR_OK;
-
-    case RDP_CMD_SET_PRIM_DEPTH:
-        state->primitive_depth = (uint16_t)(w1 >> 16);
-        state->primitive_delta_z = (uint16_t)w1;
-        return SR_OK;
+    case RDP_CMD_SET_FILL_COLOR:                  state->fill_color = cmd->decoded.set_fill_color.fill_color; return SR_OK;
+    case RDP_CMD_SET_FOG_COLOR:                   state->fog_color = cmd->decoded.set_fog_color.color; return SR_OK;
+    case RDP_CMD_SET_BLEND_COLOR:                 state->blend_color = cmd->decoded.set_blend_color.color; return SR_OK;
+    case RDP_CMD_SET_ENV_COLOR:                   state->environment_color = cmd->decoded.set_env_color.color; return SR_OK;
+    case RDP_CMD_SET_PRIM_COLOR:                  state->primitive_min_lod = cmd->decoded.set_prim_color.min_lod; state->primitive_lod_fraction = cmd->decoded.set_prim_color.lod_fraction; state->primitive_color = cmd->decoded.set_prim_color.color; return SR_OK;
+    case RDP_CMD_SET_PRIM_DEPTH:                  state->primitive_depth = cmd->decoded.set_prim_depth.depth; state->primitive_delta_z = cmd->decoded.set_prim_depth.delta_z; return SR_OK;
 
     case RDP_CMD_FILL_TRIANGLE:
     case RDP_CMD_FILL_ZBUFFER_TRIANGLE:
@@ -291,29 +289,33 @@ sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *st
     case RDP_CMD_SHADE_TRIANGLE:
     case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:
     case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
-    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:
-        return raster_submit_triangle(memory, tmem, state, cmd);
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_submit_triangle(memory, tmem, state, cmd);
 
     case RDP_CMD_TEXTURE_RECTANGLE:
     case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
-    case RDP_CMD_FILL_RECTANGLE:
-        return raster_submit_rectangle(memory, tmem, state, cmd);
+    case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, cmd);
 
     case RDP_CMD_LOAD_TLUT:
     case RDP_CMD_LOAD_BLOCK:
-    case RDP_CMD_LOAD_TILE:
-        return tmem_load_tile(tmem, memory, state, cmd);
+    case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, cmd);
 
-    case RDP_CMD_SET_COMBINE:
-        set_combine(state, w0, w1);
+    case RDP_CMD_SET_COMBINE: {
+        const rdp_set_combine_cmd *d = &cmd->decoded.set_combine;
+        state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
+        if (d->rgb_muladd0 == 3u && d->rgb_mulsub0 == 8u && d->rgb_mul0 == 16u && d->rgb_add0 == 7u &&
+            d->alpha_muladd0 == 3u && d->alpha_mulsub0 == 7u && d->alpha_mul0 == 7u && d->alpha_add0 == 7u) {
+            state->simple_combiner = RDP_SIMPLE_COMBINER_PRIMITIVE;
+        } else if (d->rgb_muladd0 == 1u && d->rgb_mulsub0 == 8u && d->rgb_mul0 == 4u && d->rgb_add0 == 7u &&
+                   d->alpha_muladd0 == 1u && d->alpha_mulsub0 == 7u && d->alpha_mul0 == 4u && d->alpha_add0 == 7u) {
+            state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0_SHADE;
+        }
         return SR_OK;
+    }
 
     case RDP_CMD_SET_CONVERT:
     case RDP_CMD_SET_KEY_GB:
-    case RDP_CMD_SET_KEY_R:
-        return SR_OK;
+    case RDP_CMD_SET_KEY_R:                       return SR_OK;
 
-    default:
-        return SR_ERROR_BAD_COMMAND;
+    default:                                      return SR_ERROR_BAD_COMMAND;
     }
 }

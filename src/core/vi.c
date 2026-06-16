@@ -16,40 +16,31 @@ void vi_init(vi_state *vi)
 
 void vi_latch_registers(vi_state *vi, const sr_host_interface *host)
 {
-    if (!vi || !host) {
-        return;
-    }
-
-    vi->control = host->vi_regs[SR_VI_STATUS] ? *host->vi_regs[SR_VI_STATUS] : 0;
-    vi->origin = host->vi_regs[SR_VI_ORIGIN] ? *host->vi_regs[SR_VI_ORIGIN] : 0;
-    vi->width = host->vi_regs[SR_VI_WIDTH] ? *host->vi_regs[SR_VI_WIDTH] : 0;
-    vi->x_scale = host->vi_regs[SR_VI_X_SCALE] ? *host->vi_regs[SR_VI_X_SCALE] : 0;
-    vi->y_scale = host->vi_regs[SR_VI_Y_SCALE] ? *host->vi_regs[SR_VI_Y_SCALE] : 0;
+    if (!vi || !host) return;
+    #define LATCH(reg) (host->vi_regs[reg] ? *host->vi_regs[reg] : 0)
+    vi->control = LATCH(SR_VI_STATUS);
+    vi->origin  = LATCH(SR_VI_ORIGIN);
+    vi->width   = LATCH(SR_VI_WIDTH);
+    vi->x_scale = LATCH(SR_VI_X_SCALE);
+    vi->y_scale = LATCH(SR_VI_Y_SCALE);
+    #undef LATCH
 }
 
 static sr_rgba8 rgba8888_to_rgba8(uint32_t value)
 {
-    sr_rgba8 color;
-
-    color.r = (uint8_t)(value >> 24);
-    color.g = (uint8_t)(value >> 16);
-    color.b = (uint8_t)(value >> 8);
-    color.a = (uint8_t)value;
-    return color;
+    return (sr_rgba8){ (uint8_t)(value >> 24), (uint8_t)(value >> 16), (uint8_t)(value >> 8), (uint8_t)value };
 }
 
 sr_result vi_scanout(const vi_state *vi, const sr_memory *memory, sr_framebuffer *out)
 {
-    const uint32_t type = vi ? (vi->control & VI_TYPE_MASK) : 0;
-    const uint32_t vi_width = vi ? vi->width : 0;
-    const uint32_t requested_height = out ? out->height : 0;
-    const uint32_t width = out && out->width ? out->width : vi_width;
-    const uint32_t stride = out && out->stride_pixels ? out->stride_pixels : width;
-    const uint32_t origin = vi ? (vi->origin & 0x00ffffffu) : 0;
+    if (!vi || !memory || !out) return SR_ERROR_INVALID_ARGUMENT;
 
-    if (!vi || !memory || !out) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
+    const uint32_t type = vi->control & VI_TYPE_MASK;
+    const uint32_t vi_width = vi->width;
+    const uint32_t requested_height = out->height;
+    const uint32_t width = out->width ? out->width : vi_width;
+    const uint32_t stride = out->stride_pixels ? out->stride_pixels : width;
+    const uint32_t origin = vi->origin & 0x00ffffffu;
 
     out->width = width;
     out->stride_pixels = stride;
@@ -60,8 +51,7 @@ sr_result vi_scanout(const vi_state *vi, const sr_memory *memory, sr_framebuffer
         return SR_OK;
     }
 
-    if (vi_width == 0 || width == 0 || width > vi_width ||
-        requested_height == 0 || !out->pixels || stride < width) {
+    if (vi_width == 0 || width == 0 || width > vi_width || requested_height == 0 || !out->pixels || stride < width) {
         out->height = 0;
         return SR_OK;
     }

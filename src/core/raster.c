@@ -2,8 +2,6 @@
 
 #include "framebuffer.h"
 #include "pipeline.h"
-#include "rdp_commands.h"
-#include "tmem.h"
 
 #include <stdint.h>
 
@@ -36,7 +34,7 @@ static raster_triangle_setup decode_triangle_setup(const rdp_command *cmd)
 static int32_t join_hi_lo(uint32_t hi_word, unsigned hi_shift, uint32_t lo_word, unsigned lo_shift)
 {
     return (int32_t)(((hi_word >> hi_shift) & 0xffff0000u) |
-                     ((lo_word >> lo_shift) & 0x0000ffffu));
+                      ((lo_word >> lo_shift) & 0x0000ffffu));
 }
 
 static raster_shade_setup decode_shade_setup(const uint32_t *w)
@@ -100,134 +98,10 @@ static raster_depth_setup decode_depth_setup(const uint32_t *w)
     return setup;
 }
 
-static uint8_t shade_component_to_u8(int32_t value)
-{
-    int32_t component = value >> 16;
-    if (component < 0) {
-        return 0;
-    }
-    if (component > 255) {
-        return 255;
-    }
-    return (uint8_t)component;
-}
-
-static rdp_color shade_base_color(const raster_shade_setup *shade)
-{
-    return (rdp_color){
-        shade_component_to_u8(shade->r),
-        shade_component_to_u8(shade->g),
-        shade_component_to_u8(shade->b),
-        shade_component_to_u8(shade->a)
-    };
-}
-
-static rdp_color shade_interpolated_color(const raster_decoded_triangle *decoded, int x, int y, int origin_x, int origin_y)
-{
-    const int64_t dx = (int64_t)(x - origin_x);
-    const int64_t dy = (int64_t)(y - origin_y);
-    raster_shade_setup shade = decoded->shade;
-
-    shade.r = (int32_t)((int64_t)shade.r + (int64_t)shade.drdx * dx + (int64_t)shade.drdy * dy);
-    shade.g = (int32_t)((int64_t)shade.g + (int64_t)shade.dgdx * dx + (int64_t)shade.dgdy * dy);
-    shade.b = (int32_t)((int64_t)shade.b + (int64_t)shade.dbdx * dx + (int64_t)shade.dbdy * dy);
-    shade.a = (int32_t)((int64_t)shade.a + (int64_t)shade.dadx * dx + (int64_t)shade.dady * dy);
-
-    return shade_base_color(&shade);
-}
-
-static int32_t texture_interpolated_value(int32_t base, int32_t ddx, int32_t ddy, int x, int y, int origin_x, int origin_y)
-{
-    const int64_t dx = (int64_t)(x - origin_x);
-    const int64_t dy = (int64_t)(y - origin_y);
-    return (int32_t)((int64_t)base + (int64_t)ddx * dx + (int64_t)ddy * dy);
-}
-
-static int32_t perspective_divide_coord(int32_t coord, int32_t w)
-{
-    int64_t divided;
-
-    if (w <= 0) {
-        return 0;
-    }
-
-    divided = ((int64_t)coord << 16) / (int64_t)w;
-    if (divided < 0) {
-        return 0;
-    }
-    if (divided > INT32_MAX) {
-        return INT32_MAX;
-    }
-    return (int32_t)divided;
-}
-
-static uint32_t texture_coord_to_texel(int32_t value)
-{
-    if (value <= 0) {
-        return 0;
-    }
-    return (uint32_t)value >> 16;
-}
-
-static uint16_t depth_interpolated_value(const raster_decoded_triangle *decoded, int x, int y, int origin_x, int origin_y)
-{
-    const int64_t dx = (int64_t)(x - origin_x);
-    const int64_t dy = (int64_t)(y - origin_y);
-    const int64_t value = (int64_t)decoded->depth.z +
-                          (int64_t)decoded->depth.dzdx * dx +
-                          (int64_t)decoded->depth.dzdy * dy;
-
-    if (value <= 0) {
-        return 0;
-    }
-    if (value >= 0xffff0000ll) {
-        return 0xffffu;
-    }
-    return (uint16_t)((uint64_t)value >> 16);
-}
-
-static sr_result depth_test_and_update(sr_memory *memory,
-                                       const rdp_state *state,
-                                       const raster_decoded_triangle *decoded,
-                                       int x,
-                                       int y,
-                                       int origin_x,
-                                       int origin_y,
-                                       bool *visible)
-{
-    uint16_t old_depth = 0xffffu;
-    const uint16_t new_depth = depth_interpolated_value(decoded, x, y, origin_x, origin_y);
-    const uint32_t pixel = (uint32_t)y * state->color_image.width + (uint32_t)x;
-    const uint32_t addr = state->depth_image_address + pixel * 2u;
-
-    *visible = true;
-    if (!decoded->has_depth || state->depth_image_address == 0) {
-        return SR_OK;
-    }
-
-    if ((state->other_modes.z_compare || state->other_modes.z_update) &&
-        !sr_memory_read_be16(memory, addr, &old_depth)) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
-
-    if (state->other_modes.z_compare && new_depth > old_depth) {
-        *visible = false;
-        return SR_OK;
-    }
-
-    if (state->other_modes.z_update &&
-        !sr_memory_write_be16(memory, addr, new_depth)) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
-
-    return SR_OK;
-}
-
 static int fixed_floor_div(int64_t value, int64_t scale)
 {
     int64_t quotient = value / scale;
     const int64_t remainder = value % scale;
-
     if (remainder && value < 0) {
         quotient--;
     }
@@ -320,79 +194,6 @@ static bool clip_span_to_scissor(raster_span *span, const rdp_state *state)
     return span->x0 <= span->x1;
 }
 
-static bool triangle_pixel_color(const raster_decoded_triangle *decoded,
-                                 const tmem_state *tmem,
-                                 const rdp_state *state,
-                                 int x,
-                                 int y,
-                                 int origin_x,
-                                 int origin_y,
-                                 rdp_color *color)
-{
-    rdp_color shade = {0, 0, 0, 255};
-    rdp_color texel0 = {0, 0, 0, 0};
-    bool have_texel = false;
-
-    if (decoded->has_shade) {
-        shade = shade_interpolated_color(decoded, x, y, origin_x, origin_y);
-    }
-
-    if (decoded->has_texture) {
-        uint16_t texel;
-        int32_t s_fixed = texture_interpolated_value(decoded->texture.s,
-                                                     decoded->texture.dsdx,
-                                                     decoded->texture.dsdy,
-                                                     x,
-                                                     y,
-                                                     origin_x,
-                                                     origin_y);
-        int32_t t_fixed = texture_interpolated_value(decoded->texture.t,
-                                                     decoded->texture.dtdx,
-                                                     decoded->texture.dtdy,
-                                                     x,
-                                                     y,
-                                                     origin_x,
-                                                     origin_y);
-
-        if (state->other_modes.perspective) {
-            const int32_t w_fixed = texture_interpolated_value(decoded->texture.w,
-                                                               decoded->texture.dwdx,
-                                                               decoded->texture.dwdy,
-                                                               x,
-                                                               y,
-                                                               origin_x,
-                                                               origin_y);
-            s_fixed = perspective_divide_coord(s_fixed, w_fixed);
-            t_fixed = perspective_divide_coord(t_fixed, w_fixed);
-        }
-
-        const uint32_t s = texture_coord_to_texel(s_fixed);
-        const uint32_t t = texture_coord_to_texel(t_fixed);
-
-        if (tmem_sample_rgba5551(tmem, state, decoded->position.tile & 7u, s, t, &texel)) {
-            texel0 = pipeline_rgba5551_to_color(texel);
-            have_texel = true;
-        }
-    }
-
-    if (have_texel) {
-        const pipeline_inputs inputs = {
-            .shade = shade,
-            .texel0 = texel0,
-            .primitive = state->primitive_color
-        };
-        *color = pipeline_shade_pixel(state, &inputs).color;
-        return true;
-    }
-
-    if (decoded->has_shade) {
-        *color = shade;
-        return true;
-    }
-
-    return false;
-}
-
 sr_result raster_decode_triangle(const rdp_command *cmd, raster_decoded_triangle *out)
 {
     if (!cmd || !out) {
@@ -403,56 +204,15 @@ sr_result raster_decode_triangle(const rdp_command *cmd, raster_decoded_triangle
     out->position = decode_triangle_setup(cmd);
 
     switch (cmd->id) {
-    case RDP_CMD_FILL_TRIANGLE:
-        return SR_OK;
-
-    case RDP_CMD_FILL_ZBUFFER_TRIANGLE:
-        out->has_depth = true;
-        out->depth = decode_depth_setup(&cmd->words[8]);
-        return SR_OK;
-
-    case RDP_CMD_TEXTURE_TRIANGLE:
-        out->has_texture = true;
-        out->texture = decode_texture_setup(&cmd->words[8]);
-        return SR_OK;
-
-    case RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE:
-        out->has_texture = true;
-        out->has_depth = true;
-        out->texture = decode_texture_setup(&cmd->words[8]);
-        out->depth = decode_depth_setup(&cmd->words[24]);
-        return SR_OK;
-
-    case RDP_CMD_SHADE_TRIANGLE:
-        out->has_shade = true;
-        out->shade = decode_shade_setup(&cmd->words[8]);
-        return SR_OK;
-
-    case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:
-        out->has_shade = true;
-        out->has_depth = true;
-        out->shade = decode_shade_setup(&cmd->words[8]);
-        out->depth = decode_depth_setup(&cmd->words[24]);
-        return SR_OK;
-
-    case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
-        out->has_shade = true;
-        out->has_texture = true;
-        out->shade = decode_shade_setup(&cmd->words[8]);
-        out->texture = decode_texture_setup(&cmd->words[24]);
-        return SR_OK;
-
-    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:
-        out->has_shade = true;
-        out->has_texture = true;
-        out->has_depth = true;
-        out->shade = decode_shade_setup(&cmd->words[8]);
-        out->texture = decode_texture_setup(&cmd->words[24]);
-        out->depth = decode_depth_setup(&cmd->words[40]);
-        return SR_OK;
-
-    default:
-        return SR_ERROR_BAD_COMMAND;
+    case RDP_CMD_FILL_TRIANGLE:                   return SR_OK;
+    case RDP_CMD_FILL_ZBUFFER_TRIANGLE:           out->has_depth = true; out->depth = decode_depth_setup(&cmd->words[8]); return SR_OK;
+    case RDP_CMD_TEXTURE_TRIANGLE:                out->has_texture = true; out->texture = decode_texture_setup(&cmd->words[8]); return SR_OK;
+    case RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE:        out->has_texture = out->has_depth = true; out->texture = decode_texture_setup(&cmd->words[8]); out->depth = decode_depth_setup(&cmd->words[24]); return SR_OK;
+    case RDP_CMD_SHADE_TRIANGLE:                  out->has_shade = true; out->shade = decode_shade_setup(&cmd->words[8]); return SR_OK;
+    case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:          out->has_shade = out->has_depth = true; out->shade = decode_shade_setup(&cmd->words[8]); out->depth = decode_depth_setup(&cmd->words[24]); return SR_OK;
+    case RDP_CMD_SHADE_TEXTURE_TRIANGLE:          out->has_shade = out->has_texture = true; out->shade = decode_shade_setup(&cmd->words[8]); out->texture = decode_texture_setup(&cmd->words[24]); return SR_OK;
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  out->has_shade = out->has_texture = out->has_depth = true; out->shade = decode_shade_setup(&cmd->words[8]); out->texture = decode_texture_setup(&cmd->words[24]); out->depth = decode_depth_setup(&cmd->words[40]); return SR_OK;
+    default:                                      return SR_ERROR_BAD_COMMAND;
     }
 }
 
@@ -462,17 +222,6 @@ typedef struct raster_rect {
     uint32_t x1;
     uint32_t y1;
 } raster_rect;
-
-static raster_rect decode_command_rect(const rdp_command *cmd)
-{
-    raster_rect rect;
-
-    rect.x1 = ((cmd->words[0] >> 12) & 0xfffu) >> 2;
-    rect.y1 = (cmd->words[0] & 0xfffu) >> 2;
-    rect.x0 = ((cmd->words[1] >> 12) & 0xfffu) >> 2;
-    rect.y0 = (cmd->words[1] & 0xfffu) >> 2;
-    return rect;
-}
 
 static bool clip_rect_to_scissor(raster_rect *rect, const rdp_state *state)
 {
@@ -494,11 +243,12 @@ static bool clip_rect_to_scissor(raster_rect *rect, const rdp_state *state)
 
 sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
 {
-    raster_decoded_triangle decoded;
-    sr_result result = raster_decode_triangle(cmd, &decoded);
-    if (result != SR_OK) {
-        return result;
+    if (!cmd) {
+        return SR_ERROR_INVALID_ARGUMENT;
     }
+    const raster_decoded_triangle decoded = cmd->decoded.triangle;
+    sr_result result = SR_OK;
+
     if (cmd->id != RDP_CMD_FILL_TRIANGLE && !decoded.has_shade && !decoded.has_texture) {
         return SR_OK;
     }
@@ -523,28 +273,7 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
         }
 
         for (int x = span.x0; x <= span.x1; x++) {
-            bool visible;
-            if (x < 0 || y < 0) {
-                continue;
-            }
-
-            result = depth_test_and_update(memory, state, &decoded, x, y, shade_origin_x, shade_origin_y, &visible);
-            if (result != SR_OK) {
-                return result;
-            }
-            if (!visible) {
-                continue;
-            }
-
-            if (fill_triangle) {
-                result = framebuffer_write_fill_pixel(memory, state, (uint32_t)x, (uint32_t)y);
-            } else {
-                rdp_color color;
-                if (!triangle_pixel_color(&decoded, tmem, state, x, y, shade_origin_x, shade_origin_y, &color)) {
-                    continue;
-                }
-                result = framebuffer_write_color(memory, state, (uint32_t)x, (uint32_t)y, color);
-            }
+            result = pipeline_process_triangle_pixel(memory, tmem, state, &decoded, x, y, shade_origin_x, shade_origin_y, fill_triangle);
             if (result != SR_OK) {
                 return result;
             }
@@ -556,13 +285,20 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
 
 static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
 {
-    const uint32_t tile_index = (cmd->words[1] >> 24) & 7u;
-    const int32_t s0 = (int16_t)(cmd->words[2] >> 16);
-    const int32_t t0 = (int16_t)cmd->words[2];
-    const int32_t dsdx = (int16_t)(cmd->words[3] >> 16);
-    const int32_t dtdy = (int16_t)cmd->words[3];
-    const bool flip = cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP;
-    raster_rect rect = decode_command_rect(cmd);
+    const rdp_rect_cmd *rect_cmd = &cmd->decoded.rect;
+    const uint32_t tile_index = rect_cmd->tile_index;
+    const int32_t s0 = rect_cmd->s0;
+    const int32_t t0 = rect_cmd->t0;
+    const int32_t dsdx = rect_cmd->dsdx;
+    const int32_t dtdy = rect_cmd->dtdy;
+    const bool flip = rect_cmd->flip;
+    
+    raster_rect rect = {
+        .x0 = rect_cmd->x0,
+        .y0 = rect_cmd->y0,
+        .x1 = rect_cmd->x1,
+        .y1 = rect_cmd->y1
+    };
     const uint32_t base_x = rect.x0;
     const uint32_t base_y = rect.y0;
 
@@ -578,18 +314,8 @@ static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, r
             const int32_t t_fixed = t0 + (flip ? dx * dsdx : dy * dtdy);
             const uint32_t s = s_fixed < 0 ? 0u : (uint32_t)s_fixed >> 5;
             const uint32_t t = t_fixed < 0 ? 0u : (uint32_t)t_fixed >> 5;
-            uint16_t texel;
 
-            if (!tmem_sample_rgba5551(tmem, state, tile_index, s, t, &texel)) {
-                return SR_ERROR_INVALID_ARGUMENT;
-            }
-
-            pipeline_inputs inputs = {
-                .texel0 = pipeline_rgba5551_to_color(texel),
-                .primitive = state->primitive_color
-            };
-            pipeline_outputs outputs = pipeline_shade_pixel(state, &inputs);
-            sr_result result = framebuffer_write_color(memory, state, x, y, outputs.color);
+            sr_result result = pipeline_process_rect_pixel(memory, tmem, state, tile_index, s, t, x, y);
             if (result != SR_OK) {
                 return result;
             }
@@ -611,7 +337,11 @@ sr_result raster_submit_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state
         return SR_OK;
     }
 
-    rect = decode_command_rect(cmd);
+    rect.x0 = cmd->decoded.rect.x0;
+    rect.y0 = cmd->decoded.rect.y0;
+    rect.x1 = cmd->decoded.rect.x1;
+    rect.y1 = cmd->decoded.rect.y1;
+
     if (state->other_modes.cycle_type == RDP_CYCLE_FILL ||
         state->other_modes.cycle_type == RDP_CYCLE_COPY) {
         rect.y1 = ((cmd->words[0] & 0xfffu) | 3u) >> 2;

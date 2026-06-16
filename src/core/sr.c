@@ -1,10 +1,22 @@
 #include "sr.h"
 
 #include "rdp_commands.h"
-#include "sr_context.h"
+#include "rdp_memory.h"
+#include "rdp_state.h"
+#include "tmem.h"
+#include "vi.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+struct sr_context {
+    sr_host_interface host;
+    sr_memory memory;
+    rdp_state rdp;
+    tmem_state tmem;
+    vi_state vi;
+    sr_debug_stats debug;
+};
 
 #define DP_STATUS_XBUS_DMA 0x001u
 #define DP_INTERRUPT 0x20u
@@ -55,6 +67,26 @@ static void finish_rdp_list(sr_context *ctx, uint32_t end, bool interrupt)
             ctx->host.raise_mi_interrupt(ctx->host.userdata);
         }
     }
+}
+
+static void rdp_state_init(rdp_state *state)
+{
+    memset(state, 0, sizeof(*state));
+
+    state->color_image.format = RDP_FORMAT_RGBA;
+    state->color_image.size = RDP_SIZE_16BPP;
+    state->color_image.width = 320;
+
+    state->texture_image.format = RDP_FORMAT_RGBA;
+    state->texture_image.size = RDP_SIZE_16BPP;
+    state->texture_image.width = 1;
+
+    state->scissor_x1 = 640u << 2;
+    state->scissor_y1 = 480u << 2;
+    state->other_modes.cycle_type = RDP_CYCLE_1;
+    state->other_modes.bilerp0 = true;
+    state->other_modes.bilerp1 = true;
+    state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
 }
 
 sr_context *sr_create(const sr_host_interface *host)
@@ -150,7 +182,11 @@ sr_result sr_process_rdp_list(sr_context *ctx)
             }
         }
 
-        sr_result result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, &cmd);
+        sr_result result = rdp_decode_command(&cmd);
+        if (result == SR_OK) {
+            result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, &cmd);
+        }
+
         if (result != SR_OK) {
             ctx->debug.last_result = result;
             finish_rdp_list(ctx, end, true);
