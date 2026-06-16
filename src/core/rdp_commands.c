@@ -179,10 +179,10 @@ static void decode_rect(rdp_rect_cmd *rect, const rdp_command *cmd)
 static void decode_load(rdp_load_cmd *load, const rdp_command *cmd)
 {
     load->tile_index = (cmd->words[1] >> 24) & 7u;
-    load->sl = ((cmd->words[0] >> 12) & 0xfffu) >> 2;
-    load->tl = (cmd->words[0] & 0xfffu) >> 2;
-    load->sh = ((cmd->words[1] >> 12) & 0xfffu) >> 2;
-    load->th = (cmd->words[1] & 0xfffu) >> 2;
+    load->sl = (uint16_t)((cmd->words[0] >> 12) & 0xfffu);
+    load->tl = (uint16_t)(cmd->words[0] & 0xfffu);
+    load->sh = (uint16_t)((cmd->words[1] >> 12) & 0xfffu);
+    load->th = (uint16_t)(cmd->words[1] & 0xfffu);
 }
 
 sr_result rdp_decode_command(rdp_command *cmd)
