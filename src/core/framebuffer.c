@@ -1,6 +1,6 @@
 #include "framebuffer.h"
 
-static bool fill_rect_16(sr_memory *memory, const rdp_state *state, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+static bool fill_rect_16(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
 {
     const uint32_t width = state->color_image.width;
     const uint32_t first_pixel = y0 * width + x0;
@@ -25,7 +25,7 @@ static bool fill_rect_16(sr_memory *memory, const rdp_state *state, uint32_t x0,
     return true;
 }
 
-static bool fill_rect_32(sr_memory *memory, const rdp_state *state, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+static bool fill_rect_32(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
 {
     const uint32_t width = state->color_image.width;
     const uint32_t first_pixel = y0 * width + x0;
@@ -76,7 +76,7 @@ static bool fill_rect_32(sr_memory *memory, const rdp_state *state, uint32_t x0,
     return true;
 }
 
-sr_result framebuffer_fill_rect(sr_memory *memory, const rdp_state *state, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
+sr_result framebuffer_fill_rect(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1)
 {
     if (!memory || !state || state->color_image.width == 0) return SR_ERROR_INVALID_ARGUMENT;
     if (x1 < x0 || y1 < y0 || x0 >= state->color_image.width) return SR_OK;

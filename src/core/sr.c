@@ -2,6 +2,7 @@
 
 #include "rdp_commands.h"
 #include "rdp_memory.h"
+#include "rdp_metrics.h"
 #include "rdp_state.h"
 #include "tmem.h"
 #include "vi.h"
@@ -20,6 +21,7 @@ struct sr_context {
     rdp_state rdp;
     tmem_state tmem;
     vi_state vi;
+    rdp_metrics metrics;
     sr_debug_stats debug;
 };
 
@@ -246,7 +248,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
 
         sr_result result = rdp_decode_command(&cmd);
         if (result == SR_OK) {
-            result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, &cmd);
+            result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, &ctx->metrics, &cmd);
         }
 
         if (result != SR_OK) {
@@ -279,7 +281,7 @@ sr_result sr_process_rdp_list(sr_context *ctx)
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
-    ctx->rdp.process_rdp_ticks += (end.QuadPart - start.QuadPart);
+    ctx->metrics.process_rdp_ticks += (end.QuadPart - start.QuadPart);
 #endif
 
     return result;
@@ -302,7 +304,7 @@ sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
-    ctx->rdp.vi_ticks += (end.QuadPart - start.QuadPart);
+    ctx->metrics.vi_ticks += (end.QuadPart - start.QuadPart);
 #endif
 
     return result;
@@ -314,53 +316,53 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
 
     if (ctx) {
         stats = ctx->debug;
-        stats.commands_seen = ctx->rdp.commands_seen;
-        stats.draw_calls_seen = ctx->rdp.draw_calls_seen;
+        stats.commands_seen = ctx->metrics.commands_seen;
+        stats.draw_calls_seen = ctx->metrics.draw_calls_seen;
 #if SOFTRDP_ENABLE_PERF_LOG
-        stats.triangle_count = ctx->rdp.triangle_count;
-        stats.triangle_ticks = ctx->rdp.triangle_ticks;
-        stats.rect_count = ctx->rdp.rect_count;
-        stats.rect_ticks = ctx->rdp.rect_ticks;
-        stats.tex_load_count = ctx->rdp.tex_load_count;
-        stats.tex_load_ticks = ctx->rdp.tex_load_ticks;
-        stats.texture_sample_attempts = ctx->rdp.texture_sample_attempts;
-        stats.texture_sample_hits = ctx->rdp.texture_sample_hits;
-        stats.texture_sample_misses = ctx->rdp.texture_sample_misses;
-        stats.texture_sample_shade_fallbacks = ctx->rdp.texture_sample_shade_fallbacks;
+        stats.triangle_count = ctx->metrics.triangle_count;
+        stats.triangle_ticks = ctx->metrics.triangle_ticks;
+        stats.rect_count = ctx->metrics.rect_count;
+        stats.rect_ticks = ctx->metrics.rect_ticks;
+        stats.tex_load_count = ctx->metrics.tex_load_count;
+        stats.tex_load_ticks = ctx->metrics.tex_load_ticks;
+        stats.texture_sample_attempts = ctx->metrics.texture_sample_attempts;
+        stats.texture_sample_hits = ctx->metrics.texture_sample_hits;
+        stats.texture_sample_misses = ctx->metrics.texture_sample_misses;
+        stats.texture_sample_shade_fallbacks = ctx->metrics.texture_sample_shade_fallbacks;
         memcpy(stats.texture_sample_by_format_size,
-               ctx->rdp.texture_sample_by_format_size,
+               ctx->metrics.texture_sample_by_format_size,
                sizeof(stats.texture_sample_by_format_size));
         memcpy(stats.texture_sample_hits_by_format_size,
-               ctx->rdp.texture_sample_hits_by_format_size,
+               ctx->metrics.texture_sample_hits_by_format_size,
                sizeof(stats.texture_sample_hits_by_format_size));
-        stats.texture_sample_tlut_attempts = ctx->rdp.texture_sample_tlut_attempts;
-        stats.texture_sample_bilerp_attempts = ctx->rdp.texture_sample_bilerp_attempts;
-        stats.texture_sample_quad_attempts = ctx->rdp.texture_sample_quad_attempts;
-        stats.texture_sample_mid_texel_attempts = ctx->rdp.texture_sample_mid_texel_attempts;
-        stats.texture_sample_perspective_attempts = ctx->rdp.texture_sample_perspective_attempts;
-        stats.texture_sample_texel0_shade_attempts = ctx->rdp.texture_sample_texel0_shade_attempts;
-        stats.texture_sample_min_s = ctx->rdp.texture_sample_min_s;
-        stats.texture_sample_max_s = ctx->rdp.texture_sample_max_s;
-        stats.texture_sample_min_t = ctx->rdp.texture_sample_min_t;
-        stats.texture_sample_max_t = ctx->rdp.texture_sample_max_t;
-        stats.texture_sample_color_xor = ctx->rdp.texture_sample_color_xor;
-        stats.texture_sample_min_s_fixed = ctx->rdp.texture_sample_min_s_fixed;
-        stats.texture_sample_max_s_fixed = ctx->rdp.texture_sample_max_s_fixed;
-        stats.texture_sample_min_t_fixed = ctx->rdp.texture_sample_min_t_fixed;
-        stats.texture_sample_max_t_fixed = ctx->rdp.texture_sample_max_t_fixed;
-        stats.texture_sample_min_w_fixed = ctx->rdp.texture_sample_min_w_fixed;
-        stats.texture_sample_max_w_fixed = ctx->rdp.texture_sample_max_w_fixed;
-        stats.rect_texture_sample_attempts = ctx->rdp.rect_texture_sample_attempts;
-        stats.rect_texture_sample_hits = ctx->rdp.rect_texture_sample_hits;
-        stats.rect_texture_sample_misses = ctx->rdp.rect_texture_sample_misses;
-        stats.tex_load_block_count = ctx->rdp.tex_load_block_count;
-        stats.tex_load_tile_count = ctx->rdp.tex_load_tile_count;
-        stats.tex_load_tlut_count = ctx->rdp.tex_load_tlut_count;
+        stats.texture_sample_tlut_attempts = ctx->metrics.texture_sample_tlut_attempts;
+        stats.texture_sample_bilerp_attempts = ctx->metrics.texture_sample_bilerp_attempts;
+        stats.texture_sample_quad_attempts = ctx->metrics.texture_sample_quad_attempts;
+        stats.texture_sample_mid_texel_attempts = ctx->metrics.texture_sample_mid_texel_attempts;
+        stats.texture_sample_perspective_attempts = ctx->metrics.texture_sample_perspective_attempts;
+        stats.texture_sample_texel0_shade_attempts = ctx->metrics.texture_sample_texel0_shade_attempts;
+        stats.texture_sample_min_s = ctx->metrics.texture_sample_min_s;
+        stats.texture_sample_max_s = ctx->metrics.texture_sample_max_s;
+        stats.texture_sample_min_t = ctx->metrics.texture_sample_min_t;
+        stats.texture_sample_max_t = ctx->metrics.texture_sample_max_t;
+        stats.texture_sample_color_xor = ctx->metrics.texture_sample_color_xor;
+        stats.texture_sample_min_s_fixed = ctx->metrics.texture_sample_min_s_fixed;
+        stats.texture_sample_max_s_fixed = ctx->metrics.texture_sample_max_s_fixed;
+        stats.texture_sample_min_t_fixed = ctx->metrics.texture_sample_min_t_fixed;
+        stats.texture_sample_max_t_fixed = ctx->metrics.texture_sample_max_t_fixed;
+        stats.texture_sample_min_w_fixed = ctx->metrics.texture_sample_min_w_fixed;
+        stats.texture_sample_max_w_fixed = ctx->metrics.texture_sample_max_w_fixed;
+        stats.rect_texture_sample_attempts = ctx->metrics.rect_texture_sample_attempts;
+        stats.rect_texture_sample_hits = ctx->metrics.rect_texture_sample_hits;
+        stats.rect_texture_sample_misses = ctx->metrics.rect_texture_sample_misses;
+        stats.tex_load_block_count = ctx->metrics.tex_load_block_count;
+        stats.tex_load_tile_count = ctx->metrics.tex_load_tile_count;
+        stats.tex_load_tlut_count = ctx->metrics.tex_load_tlut_count;
         memcpy(stats.tex_load_by_format_size,
-               ctx->rdp.tex_load_by_format_size,
+               ctx->metrics.tex_load_by_format_size,
                sizeof(stats.tex_load_by_format_size));
-        stats.vi_ticks = ctx->rdp.vi_ticks;
-        stats.process_rdp_ticks = ctx->rdp.process_rdp_ticks;
+        stats.vi_ticks = ctx->metrics.vi_ticks;
+        stats.process_rdp_ticks = ctx->metrics.process_rdp_ticks;
 #endif
     }
 

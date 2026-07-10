@@ -2,6 +2,7 @@
 #define RDP_COMMANDS_H
 
 #include "rdp_state.h"
+#include "rdp_metrics.h"
 
 typedef struct sr_memory sr_memory;
 typedef struct tmem_state tmem_state;
@@ -169,6 +170,10 @@ uint8_t rdp_command_word_count(rdp_command_id id);
 bool rdp_command_is_draw(rdp_command_id id);
 const char *rdp_command_name(rdp_command_id id);
 sr_result rdp_decode_command(rdp_command *cmd);
-sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd);
+sr_result rdp_execute_command(sr_memory *memory,
+                              tmem_state *tmem,
+                              rdp_state *state,
+                              rdp_metrics *metrics,
+                              const rdp_command *cmd);
 
 #endif

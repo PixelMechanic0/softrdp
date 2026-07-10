@@ -238,11 +238,17 @@ sr_result rdp_decode_command(rdp_command *cmd)
     }
 }
 
-sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+sr_result rdp_execute_command(sr_memory *memory,
+                              tmem_state *tmem,
+                              rdp_state *state,
+                              rdp_metrics *metrics,
+                              const rdp_command *cmd)
 {
-    state->commands_seen++;
-    if (rdp_command_is_draw(cmd->id)) {
-        state->draw_calls_seen++;
+    if (metrics) {
+        metrics->commands_seen++;
+        if (rdp_command_is_draw(cmd->id)) {
+            metrics->draw_calls_seen++;
+        }
     }
 
     switch (cmd->id) {
@@ -289,15 +295,15 @@ sr_result rdp_execute_command(sr_memory *memory, tmem_state *tmem, rdp_state *st
     case RDP_CMD_SHADE_TRIANGLE:
     case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:
     case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
-    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_submit_triangle(memory, tmem, state, cmd);
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_submit_triangle(memory, tmem, state, metrics, cmd);
 
     case RDP_CMD_TEXTURE_RECTANGLE:
     case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
-    case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, cmd);
+    case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, metrics, cmd);
 
     case RDP_CMD_LOAD_TLUT:
     case RDP_CMD_LOAD_BLOCK:
-    case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, cmd);
+    case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, metrics, cmd);
 
     case RDP_CMD_SET_COMBINE: {
         const rdp_set_combine_cmd *d = &cmd->decoded.set_combine;

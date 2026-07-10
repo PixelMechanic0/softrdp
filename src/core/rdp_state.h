@@ -119,48 +119,37 @@ typedef struct rdp_state {
     bool combiner_needs_texel0;
     bool combiner_needs_shade;
     rdp_tile tiles[8];
-    uint64_t commands_seen;
-    uint64_t draw_calls_seen;
-
-    uint64_t triangle_count;
-    uint64_t triangle_ticks;
-    uint64_t rect_count;
-    uint64_t rect_ticks;
-    uint64_t tex_load_count;
-    uint64_t tex_load_ticks;
-    uint64_t texture_sample_attempts;
-    uint64_t texture_sample_hits;
-    uint64_t texture_sample_misses;
-    uint64_t texture_sample_shade_fallbacks;
-    uint64_t texture_sample_by_format_size[5][4];
-    uint64_t texture_sample_hits_by_format_size[5][4];
-    uint64_t texture_sample_tlut_attempts;
-    uint64_t texture_sample_bilerp_attempts;
-    uint64_t texture_sample_quad_attempts;
-    uint64_t texture_sample_mid_texel_attempts;
-    uint64_t texture_sample_perspective_attempts;
-    uint64_t texture_sample_texel0_shade_attempts;
-    uint32_t texture_sample_min_s;
-    uint32_t texture_sample_max_s;
-    uint32_t texture_sample_min_t;
-    uint32_t texture_sample_max_t;
-    uint32_t texture_sample_color_xor;
-    int32_t texture_sample_min_s_fixed;
-    int32_t texture_sample_max_s_fixed;
-    int32_t texture_sample_min_t_fixed;
-    int32_t texture_sample_max_t_fixed;
-    int32_t texture_sample_min_w_fixed;
-    int32_t texture_sample_max_w_fixed;
-    uint64_t rect_texture_sample_attempts;
-    uint64_t rect_texture_sample_hits;
-    uint64_t rect_texture_sample_misses;
-    uint64_t tex_load_block_count;
-    uint64_t tex_load_tile_count;
-    uint64_t tex_load_tlut_count;
-    uint64_t tex_load_by_format_size[5][4];
-    uint64_t vi_ticks;
-    uint64_t process_rdp_ticks;
 } rdp_state;
+
+/* Draw-local snapshots consumed by individual software pipeline stages. */
+typedef struct rdp_framebuffer_state {
+    rdp_image color_image;
+    uint32_t fill_color;
+} rdp_framebuffer_state;
+
+typedef struct rdp_texture_sample_state {
+    rdp_tile tile;
+    rdp_tile_bounds bounds;
+    uint8_t tile_index;
+    bool perspective;
+    bool tlut_enable;
+    bool bilerp;
+    bool sample_quad;
+    bool mid_texel;
+} rdp_texture_sample_state;
+
+typedef struct rdp_depth_state {
+    uint32_t image_address;
+    bool compare;
+    bool update;
+} rdp_depth_state;
+
+typedef struct rdp_color_pipeline_state {
+    rdp_simple_combiner combiner;
+    rdp_color primitive_color;
+    bool needs_texel0;
+    bool needs_shade;
+} rdp_color_pipeline_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)
 {

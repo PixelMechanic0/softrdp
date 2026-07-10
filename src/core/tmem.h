@@ -2,6 +2,7 @@
 #define TMEM_H
 
 #include "rdp_state.h"
+#include "rdp_metrics.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -28,7 +29,7 @@ typedef struct tmem_texel_address {
 } tmem_texel_address;
 
 void tmem_init(tmem_state *tmem);
-sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd);
+sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, rdp_metrics *metrics, const rdp_command *cmd);
 
 static inline uint32_t shift_tile_coord(uint32_t coord, uint8_t shift)
 {
@@ -171,17 +172,17 @@ static inline bool tmem_tile_extent_from_descriptor(const rdp_tile *tile, uint32
 }
 
 static inline bool tmem_tile_sample_layout(const tmem_state *tmem,
-                                           const rdp_state *state,
-                                           uint32_t tile_index,
+                                           const rdp_texture_sample_state *sample,
                                            uint32_t *width,
                                            uint32_t *height,
                                            uint32_t *stride)
 {
-    if (!tmem || !state || !width || !height || !stride || tile_index >= 8) {
+    if (!tmem || !sample || !width || !height || !stride || sample->tile_index >= 8) {
         return false;
     }
 
-    const rdp_tile *tile = &state->tiles[tile_index];
+    const uint32_t tile_index = sample->tile_index;
+    const rdp_tile *tile = &sample->tile;
     if (tmem_tile_extent_from_descriptor(tile, width, height)) {
         *stride = tile->line;
         if (*stride == 0) {
@@ -238,23 +239,22 @@ static inline bool tmem_resolve_texel_address_raw(const rdp_tile *tile,
 }
 
 static inline bool tmem_resolve_texel_coord(const tmem_state *tmem,
-                                            const rdp_state *state,
-                                            uint32_t tile_index,
+                                            const rdp_texture_sample_state *sample,
                                             uint32_t s,
                                             uint32_t t,
-                                            const rdp_tile_bounds *bounds,
                                             uint32_t *local_s,
                                             uint32_t *local_t)
 {
-    if (!tmem || !state || !bounds || !local_s || !local_t || tile_index >= 8) {
+    if (!tmem || !sample || !local_s || !local_t || sample->tile_index >= 8) {
         return false;
     }
 
-    const rdp_tile *tile = &state->tiles[tile_index];
+    const rdp_tile *tile = &sample->tile;
+    const rdp_tile_bounds *bounds = &sample->bounds;
     uint32_t width;
     uint32_t height;
     uint32_t stride;
-    if (!tmem_tile_sample_layout(tmem, state, tile_index, &width, &height, &stride)) {
+    if (!tmem_tile_sample_layout(tmem, sample, &width, &height, &stride)) {
         return false;
     }
 
@@ -280,23 +280,22 @@ static inline bool tmem_resolve_texel_coord(const tmem_state *tmem,
 }
 
 static inline bool tmem_resolve_texel_coord_fixed5(const tmem_state *tmem,
-                                                   const rdp_state *state,
-                                                   uint32_t tile_index,
+                                                   const rdp_texture_sample_state *sample,
                                                    int32_t s_fixed,
                                                    int32_t t_fixed,
-                                                   const rdp_tile_bounds *bounds,
                                                    uint32_t *local_s,
                                                    uint32_t *local_t)
 {
-    if (!tmem || !state || !bounds || !local_s || !local_t || tile_index >= 8) {
+    if (!tmem || !sample || !local_s || !local_t || sample->tile_index >= 8) {
         return false;
     }
 
-    const rdp_tile *tile = &state->tiles[tile_index];
+    const rdp_tile *tile = &sample->tile;
+    const rdp_tile_bounds *bounds = &sample->bounds;
     uint32_t width;
     uint32_t height;
     uint32_t stride;
-    if (!tmem_tile_sample_layout(tmem, state, tile_index, &width, &height, &stride)) {
+    if (!tmem_tile_sample_layout(tmem, sample, &width, &height, &stride)) {
         return false;
     }
     (void)stride;
@@ -328,21 +327,20 @@ static inline bool tmem_resolve_texel_coord_fixed5(const tmem_state *tmem,
 }
 
 static inline bool tmem_resolve_texel_address(const tmem_state *tmem,
-                                              const rdp_state *state,
-                                              uint32_t tile_index,
+                                              const rdp_texture_sample_state *sample,
                                               uint32_t local_s,
                                               uint32_t local_t,
                                               tmem_texel_address *address)
 {
-    if (!tmem || !state || !address || tile_index >= 8) {
+    if (!tmem || !sample || !address || sample->tile_index >= 8) {
         return false;
     }
 
-    const rdp_tile *tile = &state->tiles[tile_index];
+    const rdp_tile *tile = &sample->tile;
     uint32_t width;
     uint32_t height;
     uint32_t stride;
-    if (!tmem_tile_sample_layout(tmem, state, tile_index, &width, &height, &stride)) {
+    if (!tmem_tile_sample_layout(tmem, sample, &width, &height, &stride)) {
         return false;
     }
 
@@ -357,7 +355,7 @@ static inline bool tmem_resolve_texel_address(const tmem_state *tmem,
                                           address);
 }
 
-static inline bool tmem_sample_rgba5551(const tmem_state *tmem, const rdp_state *state, uint32_t tile_index, uint32_t s, uint32_t t, const rdp_tile_bounds *bounds, uint16_t *texel)
+static inline bool tmem_sample_rgba5551(const tmem_state *tmem, const rdp_texture_sample_state *sample, uint32_t s, uint32_t t, uint16_t *texel)
 {
     if (!texel) {
         return false;
@@ -365,18 +363,17 @@ static inline bool tmem_sample_rgba5551(const tmem_state *tmem, const rdp_state 
 
     uint32_t local_s;
     uint32_t local_t;
-    if (!tmem_resolve_texel_coord(tmem, state, tile_index, s, t, bounds, &local_s, &local_t)) {
+    if (!tmem_resolve_texel_coord(tmem, sample, s, t, &local_s, &local_t)) {
         return false;
     }
 
-    if (!state || tile_index >= 8 ||
-        state->tiles[tile_index].format != RDP_FORMAT_RGBA ||
-        state->tiles[tile_index].size != RDP_SIZE_16BPP) {
+    if (!sample || sample->tile.format != RDP_FORMAT_RGBA ||
+        sample->tile.size != RDP_SIZE_16BPP) {
         return false;
     }
 
     tmem_texel_address address;
-    if (!tmem_resolve_texel_address(tmem, state, tile_index, local_s, local_t, &address)) {
+    if (!tmem_resolve_texel_address(tmem, sample, local_s, local_t, &address)) {
         return false;
     }
 
@@ -434,19 +431,18 @@ static inline rdp_color bilerp_3tap_color(rdp_color base, rdp_color edge_s, rdp_
 }
 
 static inline bool tmem_fetch_color_local(const tmem_state *tmem,
-                                          const rdp_state *state,
-                                          uint32_t tile_index,
+                                          const rdp_texture_sample_state *sample,
                                           uint32_t local_s,
                                           uint32_t local_t,
                                           rdp_color *color)
 {
-    if (!color || !state || tile_index >= 8) {
+    if (!color || !sample || sample->tile_index >= 8) {
         return false;
     }
 
-    const rdp_tile *tile = &state->tiles[tile_index];
+    const rdp_tile *tile = &sample->tile;
     tmem_texel_address address;
-    if (!tmem_resolve_texel_address(tmem, state, tile_index, local_s, local_t, &address)) {
+    if (!tmem_resolve_texel_address(tmem, sample, local_s, local_t, &address)) {
         return false;
     }
 
@@ -516,38 +512,38 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
     }
 }
 
-static inline bool tmem_sample_color(const tmem_state *tmem, const rdp_state *state, uint32_t tile_index, uint32_t s, uint32_t t, const rdp_tile_bounds *bounds, rdp_color *color)
+static inline bool tmem_sample_color(const tmem_state *tmem, const rdp_texture_sample_state *sample, uint32_t s, uint32_t t, rdp_color *color)
 {
-    if (!color || !state || tile_index >= 8) {
+    if (!color || !sample || sample->tile_index >= 8) {
         return false;
     }
 
     uint32_t local_s;
     uint32_t local_t;
-    if (!tmem_resolve_texel_coord(tmem, state, tile_index, s, t, bounds, &local_s, &local_t)) {
+    if (!tmem_resolve_texel_coord(tmem, sample, s, t, &local_s, &local_t)) {
         return false;
     }
 
-    return tmem_fetch_color_local(tmem, state, tile_index, local_s, local_t, color);
+    return tmem_fetch_color_local(tmem, sample, local_s, local_t, color);
 }
 
-static inline bool tmem_sample_color_fixed5(const tmem_state *tmem, const rdp_state *state, uint32_t tile_index, int32_t s_fixed, int32_t t_fixed, const rdp_tile_bounds *bounds, rdp_color *color)
+static inline bool tmem_sample_color_fixed5(const tmem_state *tmem, const rdp_texture_sample_state *sample, int32_t s_fixed, int32_t t_fixed, rdp_color *color)
 {
-    if (!color || !state || tile_index >= 8) {
+    if (!color || !sample || sample->tile_index >= 8) {
         return false;
     }
 
     uint32_t local_s;
     uint32_t local_t;
-    if (!tmem_resolve_texel_coord_fixed5(tmem, state, tile_index, s_fixed, t_fixed, bounds, &local_s, &local_t)) {
+    if (!tmem_resolve_texel_coord_fixed5(tmem, sample, s_fixed, t_fixed, &local_s, &local_t)) {
         return false;
     }
 
-    if (state->other_modes.bilerp0 && state->other_modes.sample_quad) {
+    if (sample->bilerp && sample->sample_quad) {
         uint32_t local_s1;
         uint32_t local_t1;
         rdp_color c00, c10, c01, c11;
-        const rdp_tile *tile = &state->tiles[tile_index];
+        const rdp_tile *tile = &sample->tile;
         const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed, tile->shift_s);
         const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed, tile->shift_t);
         const int32_t rel_s = shifted_s - ((int32_t)tile->sl << 3);
@@ -555,14 +551,14 @@ static inline bool tmem_sample_color_fixed5(const tmem_state *tmem, const rdp_st
         const uint32_t frac_s = rel_s <= 0 ? 0u : (uint32_t)rel_s & 31u;
         const uint32_t frac_t = rel_t <= 0 ? 0u : (uint32_t)rel_t & 31u;
 
-        if (tmem_resolve_texel_coord_fixed5(tmem, state, tile_index, s_fixed + 32, t_fixed, bounds, &local_s1, &local_t) &&
-            tmem_resolve_texel_coord_fixed5(tmem, state, tile_index, s_fixed, t_fixed + 32, bounds, &local_s, &local_t1) &&
-            tmem_resolve_texel_coord_fixed5(tmem, state, tile_index, s_fixed + 32, t_fixed + 32, bounds, &local_s1, &local_t1) &&
-            tmem_fetch_color_local(tmem, state, tile_index, local_s, local_t, &c00) &&
-            tmem_fetch_color_local(tmem, state, tile_index, local_s1, local_t, &c10) &&
-            tmem_fetch_color_local(tmem, state, tile_index, local_s, local_t1, &c01) &&
-            tmem_fetch_color_local(tmem, state, tile_index, local_s1, local_t1, &c11)) {
-            if (state->other_modes.mid_texel && frac_s == 16u && frac_t == 16u) {
+        if (tmem_resolve_texel_coord_fixed5(tmem, sample, s_fixed + 32, t_fixed, &local_s1, &local_t) &&
+            tmem_resolve_texel_coord_fixed5(tmem, sample, s_fixed, t_fixed + 32, &local_s, &local_t1) &&
+            tmem_resolve_texel_coord_fixed5(tmem, sample, s_fixed + 32, t_fixed + 32, &local_s1, &local_t1) &&
+            tmem_fetch_color_local(tmem, sample, local_s, local_t, &c00) &&
+            tmem_fetch_color_local(tmem, sample, local_s1, local_t, &c10) &&
+            tmem_fetch_color_local(tmem, sample, local_s, local_t1, &c01) &&
+            tmem_fetch_color_local(tmem, sample, local_s1, local_t1, &c11)) {
+            if (sample->mid_texel && frac_s == 16u && frac_t == 16u) {
                 *color = (rdp_color){
                     (uint8_t)(((uint32_t)c00.r + c10.r + c01.r + c11.r + 2u) >> 2),
                     (uint8_t)(((uint32_t)c00.g + c10.g + c01.g + c11.g + 2u) >> 2),
@@ -581,7 +577,7 @@ static inline bool tmem_sample_color_fixed5(const tmem_state *tmem, const rdp_st
         }
     }
 
-    return tmem_fetch_color_local(tmem, state, tile_index, local_s, local_t, color);
+    return tmem_fetch_color_local(tmem, sample, local_s, local_t, color);
 }
 
 #endif

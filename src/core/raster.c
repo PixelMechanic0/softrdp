@@ -247,7 +247,11 @@ static bool clip_rect_to_scissor(raster_rect *rect, const rdp_state *state)
     return rect->x0 <= rect->x1 && rect->y0 <= rect->y1;
 }
 
-sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+sr_result raster_submit_triangle(sr_memory *memory,
+                                 tmem_state *tmem,
+                                 const rdp_state *state,
+                                 rdp_metrics *metrics,
+                                 const rdp_command *cmd)
 {
     if (!cmd) {
         return SR_ERROR_INVALID_ARGUMENT;
@@ -272,10 +276,13 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
     QueryPerformanceCounter(&start);
 #endif
 
-    rdp_tile_bounds bounds = {0};
-    if (decoded.has_texture) {
-        pipeline_resolve_tile_bounds(state, tmem, decoded.position.tile & 7u, &bounds);
-    }
+    rdp_primitive_state primitive;
+    pipeline_compile_triangle(&primitive,
+                              state,
+                              tmem,
+                              metrics,
+                              &decoded,
+                              fill_triangle);
 
     for (int y = yh; y < yl; y++) {
         raster_span span;
@@ -286,12 +293,16 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
             continue;
         }
 
-        result = pipeline_process_triangle_span(memory, tmem, state, &decoded, span.x0, span.x1, y, fill_triangle, &bounds);
+        rdp_span_work work;
+        pipeline_setup_triangle_span(&primitive, span.x0, span.x1, y, &work);
+        result = pipeline_render_triangle_span(memory, &primitive, &work);
         if (result != SR_OK) {
 #if SOFTRDP_ENABLE_PERF_LOG
             QueryPerformanceCounter(&end);
-            state->triangle_ticks += (end.QuadPart - start.QuadPart);
-            state->triangle_count++;
+            if (metrics) {
+                metrics->triangle_ticks += (end.QuadPart - start.QuadPart);
+                metrics->triangle_count++;
+            }
 #endif
             return result;
         }
@@ -299,14 +310,20 @@ sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, rdp_state 
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
-    state->triangle_ticks += (end.QuadPart - start.QuadPart);
-    state->triangle_count++;
+    if (metrics) {
+        metrics->triangle_ticks += (end.QuadPart - start.QuadPart);
+        metrics->triangle_count++;
+    }
 #endif
 
     return SR_OK;
 }
 
-static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+static sr_result submit_texture_rectangle(sr_memory *memory,
+                                          tmem_state *tmem,
+                                          const rdp_state *state,
+                                          rdp_metrics *metrics,
+                                          const rdp_command *cmd)
 {
     const rdp_rect_cmd *rect_cmd = &cmd->decoded.rect;
     const uint32_t tile_index = rect_cmd->tile_index;
@@ -329,34 +346,47 @@ static sr_result submit_texture_rectangle(sr_memory *memory, tmem_state *tmem, r
         return SR_OK;
     }
 
-    rdp_tile_bounds bounds = {0};
-    pipeline_resolve_tile_bounds(state, tmem, tile_index, &bounds);
+    rdp_primitive_state primitive;
+    pipeline_compile_rectangle(&primitive, state, tmem, metrics, tile_index);
 
     for (uint32_t y = rect.y0; y <= rect.y1; y++) {
-        for (uint32_t x = rect.x0; x <= rect.x1; x++) {
-            const int32_t dx = (int32_t)(x - base_x);
-            const int32_t dy = (int32_t)(y - base_y);
-            const int32_t s_fixed = s0 + (flip ? dy * dtdy : dx * dsdx);
-            const int32_t t_fixed = t0 + (flip ? dx * dsdx : dy * dtdy);
-            const uint32_t s = s_fixed < 0 ? 0u : (uint32_t)s_fixed >> 5;
-            const uint32_t t = t_fixed < 0 ? 0u : (uint32_t)t_fixed >> 5;
+        const int32_t dx = (int32_t)(rect.x0 - base_x);
+        const int32_t dy = (int32_t)(y - base_y);
+        const int32_t s_fixed = s0 + (flip ? dy * dtdy : dx * dsdx);
+        const int32_t t_fixed = t0 + (flip ? dx * dsdx : dy * dtdy);
+        const int32_t span_dsdx = flip ? 0 : dsdx;
+        const int32_t span_dtdx = flip ? dsdx : 0;
+        rdp_span_work work;
 
-            sr_result result = pipeline_process_rect_pixel(memory, tmem, state, tile_index, s, t, x, y, &bounds);
-            if (result != SR_OK) {
-                return result;
-            }
+        pipeline_setup_rectangle_span((int)rect.x0,
+                                      (int)rect.x1,
+                                      (int)y,
+                                      s_fixed,
+                                      t_fixed,
+                                      &work);
+        sr_result result = pipeline_render_rectangle_span(memory,
+                                                          &primitive,
+                                                          &work,
+                                                          span_dsdx,
+                                                          span_dtdx);
+        if (result != SR_OK) {
+            return result;
         }
     }
 
     return SR_OK;
 }
 
-static sr_result raster_submit_rectangle_internal(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+static sr_result raster_submit_rectangle_internal(sr_memory *memory,
+                                                  tmem_state *tmem,
+                                                  const rdp_state *state,
+                                                  rdp_metrics *metrics,
+                                                  const rdp_command *cmd)
 {
     raster_rect rect;
 
     if (cmd->id == RDP_CMD_TEXTURE_RECTANGLE || cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP) {
-        return submit_texture_rectangle(memory, tmem, state, cmd);
+        return submit_texture_rectangle(memory, tmem, state, metrics, cmd);
     }
 
     if (cmd->id != RDP_CMD_FILL_RECTANGLE) {
@@ -377,22 +407,35 @@ static sr_result raster_submit_rectangle_internal(sr_memory *memory, tmem_state 
         return SR_OK;
     }
 
-    return framebuffer_fill_rect(memory, state, rect.x0, rect.y0, rect.x1, rect.y1);
+    rdp_framebuffer_state framebuffer;
+    pipeline_compile_framebuffer(&framebuffer, state);
+    return framebuffer_fill_rect(memory,
+                                 &framebuffer,
+                                 rect.x0,
+                                 rect.y0,
+                                 rect.x1,
+                                 rect.y1);
 }
 
-sr_result raster_submit_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd)
+sr_result raster_submit_rectangle(sr_memory *memory,
+                                  tmem_state *tmem,
+                                  const rdp_state *state,
+                                  rdp_metrics *metrics,
+                                  const rdp_command *cmd)
 {
 #if SOFTRDP_ENABLE_PERF_LOG
     LARGE_INTEGER start, end;
     QueryPerformanceCounter(&start);
 #endif
 
-    sr_result result = raster_submit_rectangle_internal(memory, tmem, state, cmd);
+    sr_result result = raster_submit_rectangle_internal(memory, tmem, state, metrics, cmd);
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
-    state->rect_ticks += (end.QuadPart - start.QuadPart);
-    state->rect_count++;
+    if (metrics) {
+        metrics->rect_ticks += (end.QuadPart - start.QuadPart);
+        metrics->rect_count++;
+    }
 #endif
 
     return result;

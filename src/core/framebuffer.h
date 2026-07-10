@@ -7,26 +7,26 @@
 #include <stdint.h>
 
 sr_result framebuffer_fill_rect(sr_memory *memory,
-                                const rdp_state *state,
+                                const rdp_framebuffer_state *state,
                                 uint32_t x0,
                                 uint32_t y0,
                                 uint32_t x1,
                                 uint32_t y1);
 
-static inline bool write_fill_pixel_16(sr_memory *memory, const rdp_state *state, uint32_t x, uint32_t y)
+static inline bool write_fill_pixel_16(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x, uint32_t y)
 {
     const uint32_t pixel = y * state->color_image.width + x;
     const uint16_t value = (pixel & 1u) ? (uint16_t)state->fill_color : (uint16_t)(state->fill_color >> 16);
     return sr_memory_write_be16(memory, state->color_image.address + pixel * 2u, value);
 }
 
-static inline bool write_fill_pixel_32(sr_memory *memory, const rdp_state *state, uint32_t x, uint32_t y)
+static inline bool write_fill_pixel_32(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x, uint32_t y)
 {
     const uint32_t pixel = y * state->color_image.width + x;
     return sr_memory_write_be32(memory, state->color_image.address + pixel * 4u, state->fill_color);
 }
 
-static inline sr_result framebuffer_write_rgba5551(sr_memory *memory, const rdp_state *state, uint32_t x, uint32_t y, uint16_t texel)
+static inline sr_result framebuffer_write_rgba5551(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x, uint32_t y, uint16_t texel)
 {
     if (!memory || !state || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     const uint32_t pixel = y * state->color_image.width + x;
@@ -37,7 +37,7 @@ static inline sr_result framebuffer_write_rgba5551(sr_memory *memory, const rdp_
     }
 }
 
-static inline sr_result framebuffer_write_color(sr_memory *memory, const rdp_state *state, uint32_t x, uint32_t y, rdp_color color)
+static inline sr_result framebuffer_write_color(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x, uint32_t y, rdp_color color)
 {
     if (!memory || !state || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     const uint32_t pixel = y * state->color_image.width + x;
@@ -48,7 +48,7 @@ static inline sr_result framebuffer_write_color(sr_memory *memory, const rdp_sta
     }
 }
 
-static inline sr_result framebuffer_write_fill_pixel(sr_memory *memory, const rdp_state *state, uint32_t x, uint32_t y)
+static inline sr_result framebuffer_write_fill_pixel(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x, uint32_t y)
 {
     if (!memory || !state || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     switch (state->color_image.size) {

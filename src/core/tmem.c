@@ -187,7 +187,11 @@ static sr_result load_rgba32_tile(tmem_state *tmem, sr_memory *memory, const rdp
     return SR_OK;
 }
 
-static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd)
+static sr_result tmem_load_tile_internal(tmem_state *tmem,
+                                         sr_memory *memory,
+                                         const rdp_state *state,
+                                         rdp_metrics *metrics,
+                                         const rdp_command *cmd)
 {
     if (!tmem || !memory || !state || !cmd) {
         return SR_ERROR_INVALID_ARGUMENT;
@@ -197,22 +201,26 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rd
     const rdp_tile *tile = &state->tiles[tile_index];
 
 #if SOFTRDP_ENABLE_PERF_LOG
-    switch (cmd->id) {
-    case RDP_CMD_LOAD_BLOCK:
-        state->tex_load_block_count++;
-        break;
-    case RDP_CMD_LOAD_TLUT:
-        state->tex_load_tlut_count++;
-        break;
-    case RDP_CMD_LOAD_TILE:
-        state->tex_load_tile_count++;
-        break;
-    default:
-        break;
+    if (metrics) {
+        switch (cmd->id) {
+        case RDP_CMD_LOAD_BLOCK:
+            metrics->tex_load_block_count++;
+            break;
+        case RDP_CMD_LOAD_TLUT:
+            metrics->tex_load_tlut_count++;
+            break;
+        case RDP_CMD_LOAD_TILE:
+            metrics->tex_load_tile_count++;
+            break;
+        default:
+            break;
+        }
+        if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
+            metrics->tex_load_by_format_size[tile->format][tile->size]++;
+        }
     }
-    if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
-        state->tex_load_by_format_size[tile->format][tile->size]++;
-    }
+#else
+    (void)metrics;
 #endif
 
     if (!texture_state_supports_load(state, tile)) {
@@ -233,20 +241,24 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem, sr_memory *memory, rd
     return load_16bpp_tile(tmem, memory, state, tile, cmd);
 }
 
-sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, rdp_state *state, const rdp_command *cmd)
+sr_result tmem_load_tile(tmem_state *tmem,
+                         sr_memory *memory,
+                         const rdp_state *state,
+                         rdp_metrics *metrics,
+                         const rdp_command *cmd)
 {
 #if SOFTRDP_ENABLE_PERF_LOG
     LARGE_INTEGER start, end;
     QueryPerformanceCounter(&start);
 #endif
 
-    sr_result result = tmem_load_tile_internal(tmem, memory, state, cmd);
+    sr_result result = tmem_load_tile_internal(tmem, memory, state, metrics, cmd);
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
-    if (state) {
-        state->tex_load_ticks += (end.QuadPart - start.QuadPart);
-        state->tex_load_count++;
+    if (metrics) {
+        metrics->tex_load_ticks += (end.QuadPart - start.QuadPart);
+        metrics->tex_load_count++;
     }
 #endif
 
