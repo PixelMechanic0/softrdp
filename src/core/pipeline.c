@@ -43,19 +43,20 @@ static inline rdp_color combine_shade_pixel(const rdp_primitive_state *primitive
     return pipeline_shade_pixel(&primitive->color, &inputs).color;
 }
 
+static int32_t triangle_coord_fixed5(int32_t interpolated)
+{
+    return (int16_t)((uint32_t)interpolated >> 16);
+}
+
 static int32_t perspective_divide_coord(int32_t coord, int32_t w)
 {
-    if (w == 0) {
-        return coord < 0 ? INT32_MIN : INT32_MAX;
+    const int32_t coord_fixed5 = triangle_coord_fixed5(coord);
+    const int32_t w_fixed15 = (int16_t)((uint32_t)w >> 16);
+    if (w_fixed15 <= 0) {
+        return 0x7fffu;
     }
-    const int64_t divided = ((int64_t)coord * 65536ll) / (int64_t)w;
-    if (divided < INT32_MIN) {
-        return INT32_MIN;
-    }
-    if (divided > INT32_MAX) {
-        return INT32_MAX;
-    }
-    return (int32_t)divided;
+    const int64_t divided = ((int64_t)coord_fixed5 * 32768ll) / w_fixed15;
+    return divided < -0x10000ll ? -0x10000 : (divided > 0xffffll ? 0xffff : (int32_t)divided);
 }
 
 static uint32_t texture_coord_to_texel(int32_t value)
@@ -325,6 +326,9 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     if (texture->perspective) {
                         s_fixed = perspective_divide_coord(s_fixed, cursor.w_fixed);
                         t_fixed = perspective_divide_coord(t_fixed, cursor.w_fixed);
+                    } else {
+                        s_fixed = triangle_coord_fixed5(s_fixed);
+                        t_fixed = triangle_coord_fixed5(t_fixed);
                     }
 
                     rdp_color texel0;
