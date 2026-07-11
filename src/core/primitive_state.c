@@ -1,6 +1,7 @@
 #include "pipeline.h"
 
 #include "tmem.h"
+#include "depth.h"
 
 #include <string.h>
 
@@ -57,8 +58,11 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->texture.sample_quad = registers->other_modes.sample_quad;
     primitive->texture.mid_texel = registers->other_modes.mid_texel;
     primitive->fragment.depth.image_address = registers->depth_image_address;
+    primitive->fragment.depth.primitive_depth = registers->primitive_depth;
+    primitive->fragment.depth.primitive_delta_z = registers->primitive_delta_z;
     primitive->fragment.depth.compare = registers->other_modes.z_compare;
     primitive->fragment.depth.update = registers->other_modes.z_update;
+    primitive->fragment.depth.source_primitive = registers->other_modes.z_source_primitive;
     primitive->color.program = registers->combiner;
     primitive->color.primitive_color = registers->primitive_color;
     primitive->color.environment_color = registers->environment_color;
@@ -106,6 +110,9 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
                             metrics,
                             triangle->position.tile);
     primitive->triangle = *triangle;
+    primitive->fragment.depth.pixel_delta_z = primitive->fragment.depth.source_primitive
+        ? registers->primitive_delta_z
+        : rdp_depth_normalize_delta(triangle->depth.dzdx, triangle->depth.dzdy);
     primitive->fill_mode = fill_mode;
     primitive->span_kernel = pipeline_select_triangle_kernel(primitive);
 }

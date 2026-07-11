@@ -117,6 +117,7 @@ static void decode_set_other_modes(rdp_other_modes *modes, uint32_t w0, uint32_t
     modes->image_read = (w1 & (1u << 6)) != 0;
     modes->z_update = (w1 & (1u << 5)) != 0;
     modes->z_compare = (w1 & (1u << 4)) != 0;
+    modes->z_source_primitive = (w1 & (1u << 2)) != 0;
     modes->antialias = (w1 & (1u << 3)) != 0;
     modes->alpha_compare = (w1 & 1u) != 0;
     modes->alpha_compare_dither = (w1 & (1u << 1)) != 0;

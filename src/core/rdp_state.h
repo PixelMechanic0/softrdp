@@ -79,6 +79,7 @@ typedef struct rdp_other_modes {
     bool image_read;
     bool z_update;
     bool z_compare;
+    bool z_source_primitive;
     bool antialias;
     bool alpha_compare;
     bool alpha_compare_dither;
@@ -185,8 +186,12 @@ typedef struct rdp_texture_sample_state {
 
 typedef struct rdp_depth_state {
     uint32_t image_address;
+    uint16_t primitive_depth;
+    uint16_t primitive_delta_z;
+    uint16_t pixel_delta_z;
     bool compare;
     bool update;
+    bool source_primitive;
 } rdp_depth_state;
 
 typedef struct rdp_color_pipeline_state {

@@ -69,9 +69,13 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
     work->y = y;
 
     if (decoded->has_depth) {
-        work->depth_fixed = (int64_t)decoded->depth.z +
-                            ((int64_t)decoded->depth.dzdx * dx_fixed +
-                             (int64_t)decoded->depth.dzdy * dy_fixed) / 65536;
+        work->depth_fixed = interpolate_attribute(decoded,
+                                                  decoded->depth.z,
+                                                  decoded->depth.dzdx,
+                                                  decoded->depth.dzde,
+                                                  decoded->depth.dzdy,
+                                                  x_begin,
+                                                  y);
     }
 
     if (decoded->has_texture && primitive->color.needs_texel0) {

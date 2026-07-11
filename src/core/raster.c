@@ -259,10 +259,6 @@ sr_result raster_submit_triangle(sr_memory *memory,
     const raster_decoded_triangle decoded = cmd->decoded.triangle;
     sr_result result = SR_OK;
 
-    if (cmd->id != RDP_CMD_FILL_TRIANGLE && !decoded.has_shade && !decoded.has_texture) {
-        return SR_OK;
-    }
-
     const int yh = fixed_ceil_div(decoded.position.yh - 2, 4);
     const int yl = fixed_ceil_div(decoded.position.yl - 2, 4);
     const bool fill_triangle = cmd->id == RDP_CMD_FILL_TRIANGLE;

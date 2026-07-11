@@ -4,6 +4,7 @@
 #include "rdp_memory.h"
 #include "tmem.h"
 #include "blender.h"
+#include "depth.h"
 
 pipeline_outputs pipeline_shade_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs)
 {
@@ -63,11 +64,6 @@ static int32_t perspective_divide_coord(int32_t coord, int32_t w)
 static uint32_t texture_coord_to_texel(int32_t value)
 {
     return value <= 0 ? 0 : (uint32_t)value >> 5;
-}
-
-static uint16_t depth_fixed_to_u16(int64_t value)
-{
-    return value <= 0 ? 0 : (value >= 0xffff0000ll ? 0xffffu : (uint16_t)((uint64_t)value >> 16));
 }
 
 static void record_texture_sample_coord(rdp_metrics *metrics, uint32_t s, uint32_t t)
@@ -174,8 +170,10 @@ static sr_result pipeline_write_fragment(sr_memory *memory,
                                          const rdp_primitive_state *primitive,
                                          uint32_t x, uint32_t y,
                                          rdp_color pixel,
-                                         uint8_t shade_alpha)
+                                         uint8_t shade_alpha,
+                                         bool *accepted)
 {
+    if (accepted) *accepted = false;
     const rdp_fragment_state *fragment = &primitive->fragment;
     uint32_t coverage = 8u;
     uint32_t modulated_alpha = pixel.a;
@@ -217,8 +215,17 @@ static sr_result pipeline_write_fragment(sr_memory *memory,
     default:final_coverage = memory_pixel.coverage; break;
     }
     pixel.a = (uint8_t)((final_coverage << 5) | 0x1fu);
-    return framebuffer_write_color(memory, &primitive->framebuffer, x, y, pixel);
+    const sr_result result = framebuffer_write_color(memory, &primitive->framebuffer, x, y, pixel);
+    if (result == SR_OK && accepted) *accepted = true;
+    return result;
 }
+
+typedef struct rdp_depth_result {
+    bool pass;
+    bool update;
+    uint32_t address;
+    uint16_t compressed;
+} rdp_depth_result;
 
 static inline void triangle_span_work_step(const raster_decoded_triangle *decoded,
                                            const rdp_primitive_state *primitive,
@@ -246,30 +253,63 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
                                           const rdp_primitive_state *primitive,
                                           const rdp_span_work *cursor,
                                           int x,
-                                          bool *visible)
+                                          rdp_depth_result *result)
 {
     const rdp_depth_state *depth = &primitive->fragment.depth;
-    *visible = true;
-    if (!primitive->triangle.has_depth || depth->image_address == 0) {
+    *result = (rdp_depth_result){ .pass = true };
+    if ((!primitive->triangle.has_depth && !depth->source_primitive) || depth->image_address == 0) {
         return SR_OK;
     }
 
-    uint16_t old_depth = 0xffffu;
-    const uint16_t new_depth = depth_fixed_to_u16(cursor->depth_fixed);
+    uint16_t old_compressed = rdp_depth_compress(0x3ffffu);
+    const uint32_t new_depth = depth->source_primitive
+        ? rdp_depth_from_primitive(depth->primitive_depth)
+        : rdp_depth_from_span(cursor->depth_fixed);
     const uint32_t pixel = (uint32_t)cursor->y * primitive->framebuffer.color_image.width + (uint32_t)x;
     const uint32_t addr = depth->image_address + pixel * 2u;
 
     if ((depth->compare || depth->update) &&
-        !sr_memory_read_be16(memory, addr, &old_depth)) {
+        !sr_memory_read_be16(memory, addr, &old_compressed)) {
         return SR_ERROR_INVALID_ARGUMENT;
     }
-    if (depth->compare && new_depth > old_depth) {
-        *visible = false;
-    } else if (depth->update &&
-               !sr_memory_write_be16(memory, addr, new_depth)) {
-        return SR_ERROR_INVALID_ARGUMENT;
+    const uint32_t old_depth = rdp_depth_decompress(old_compressed);
+    if (depth->compare) {
+        const uint8_t old_dz_encoded = (uint8_t)((old_compressed & 3u) << 2);
+        uint32_t combined_dz = depth->pixel_delta_z |
+                               rdp_depth_decompress_delta(old_dz_encoded);
+        if (combined_dz) {
+            uint32_t power = 1u;
+            while (combined_dz >>= 1u) power <<= 1u;
+            combined_dz = power << 3u;
+        }
+
+        const bool max_depth = old_depth == 0x3ffffu;
+        const bool front = new_depth < old_depth;
+        const bool nearer = new_depth <= old_depth + combined_dz;
+        const bool farther = new_depth + combined_dz >= old_depth;
+        switch (primitive->fragment.z_mode & 3u) {
+        case 0: result->pass = max_depth || nearer; break;
+        case 1: result->pass = max_depth || nearer; break;
+        case 2: result->pass = max_depth || front; break;
+        default:result->pass = !max_depth && nearer && farther; break;
+        }
+    }
+    if (result->pass && depth->update) {
+        result->update = true;
+        result->address = addr;
+        result->compressed = rdp_depth_pack(new_depth,
+            rdp_depth_compress_delta(depth->pixel_delta_z));
     }
     return SR_OK;
+}
+
+static inline sr_result commit_depth_update(sr_memory *memory,
+                                            const rdp_depth_result *depth,
+                                            bool fragment_accepted)
+{
+    if (!fragment_accepted || !depth->update) return SR_OK;
+    return sr_memory_write_be16(memory, depth->address, depth->compressed)
+        ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
 }
 
 sr_result pipeline_render_fill_triangle_span(sr_memory *memory,
@@ -288,6 +328,34 @@ sr_result pipeline_render_fill_triangle_span(sr_memory *memory,
     return SR_OK;
 }
 
+sr_result pipeline_render_depth_triangle_span(sr_memory *memory,
+                                               const rdp_primitive_state *primitive,
+                                               const rdp_span_work *work)
+{
+    rdp_span_work cursor = *work;
+    for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
+        rdp_depth_result depth;
+        sr_result result = scalar_depth_test(memory, primitive, &cursor, x, &depth);
+        if (result != SR_OK) return result;
+        if (depth.pass) {
+            const pipeline_inputs inputs = {
+                .primitive = primitive->color.primitive_color,
+                .environment = primitive->color.environment_color,
+                .primitive_lod_fraction = primitive->color.primitive_lod_fraction
+            };
+            bool accepted;
+            const rdp_color color = pipeline_shade_pixel(&primitive->color, &inputs).color;
+            result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
+                                             (uint32_t)cursor.y, color, 0u, &accepted);
+            if (result != SR_OK) return result;
+            result = commit_depth_update(memory, &depth, accepted);
+            if (result != SR_OK) return result;
+        }
+        triangle_span_work_step(&primitive->triangle, primitive, &cursor);
+    }
+    return SR_OK;
+}
+
 sr_result pipeline_render_shade_triangle_span(sr_memory *memory,
                                               const rdp_primitive_state *primitive,
                                               const rdp_span_work *work)
@@ -297,7 +365,7 @@ sr_result pipeline_render_shade_triangle_span(sr_memory *memory,
         const rdp_color color = combine_shade_pixel(primitive, &cursor.shade);
         sr_result result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
                                                    (uint32_t)cursor.y, color,
-                                                   shade_base_color(&cursor.shade).a);
+                                                   shade_base_color(&cursor.shade).a, NULL);
         if (result != SR_OK) {
             return result;
         }
@@ -312,19 +380,22 @@ sr_result pipeline_render_shade_depth_triangle_span(sr_memory *memory,
 {
     rdp_span_work cursor = *work;
     for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
-        bool visible;
-        sr_result result = scalar_depth_test(memory, primitive, &cursor, x, &visible);
+        rdp_depth_result depth;
+        sr_result result = scalar_depth_test(memory, primitive, &cursor, x, &depth);
         if (result != SR_OK) {
             return result;
         }
-        if (visible) {
+        if (depth.pass) {
             const rdp_color color = combine_shade_pixel(primitive, &cursor.shade);
+            bool accepted;
             result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
                                              (uint32_t)cursor.y, color,
-                                             shade_base_color(&cursor.shade).a);
+                                             shade_base_color(&cursor.shade).a, &accepted);
             if (result != SR_OK) {
                 return result;
             }
+            result = commit_depth_update(memory, &depth, accepted);
+            if (result != SR_OK) return result;
         }
         triangle_span_work_step(&primitive->triangle, primitive, &cursor);
     }
@@ -358,13 +429,14 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     rdp_span_work cursor = *work;
 
     for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
-        bool visible;
-        sr_result depth_result = scalar_depth_test(memory, primitive, &cursor, x, &visible);
+        rdp_depth_result depth;
+        sr_result depth_result = scalar_depth_test(memory, primitive, &cursor, x, &depth);
         if (depth_result != SR_OK) {
             return depth_result;
         }
 
-        if (visible) {
+        bool fragment_accepted = false;
+        if (depth.pass) {
             if (decoded->has_texture) {
                 const bool needs_texel0 = color_pipeline->needs_texel0;
                 bool wrote_color = false;
@@ -397,7 +469,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                         const rdp_color color = pipeline_shade_pixel(color_pipeline, &inputs).color;
                         sr_result result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
                                                                   (uint32_t)cursor.y, color,
-                                                                  inputs.shade.a);
+                                                                  inputs.shade.a, &fragment_accepted);
                         if (result != SR_OK) {
                             return result;
                         }
@@ -417,7 +489,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     sr_result result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
                                                                (uint32_t)cursor.y,
                                                                pipeline_shade_pixel(color_pipeline, &inputs).color,
-                                                               inputs.shade.a);
+                                                               inputs.shade.a, &fragment_accepted);
                     if (result != SR_OK) {
                         return result;
                     }
@@ -430,7 +502,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     }
                     const rdp_color shade = shade_base_color(&cursor.shade);
                     sr_result result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
-                                                               (uint32_t)cursor.y, shade, shade.a);
+                                                               (uint32_t)cursor.y, shade, shade.a,
+                                                               &fragment_accepted);
                     if (result != SR_OK) {
                         return result;
                     }
@@ -438,12 +511,16 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             } else if (decoded->has_shade) {
                 const rdp_color shade = shade_base_color(&cursor.shade);
                 sr_result result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
-                                                           (uint32_t)cursor.y, shade, shade.a);
+                                                           (uint32_t)cursor.y, shade, shade.a,
+                                                           &fragment_accepted);
                 if (result != SR_OK) {
                     return result;
                 }
             }
         }
+
+        depth_result = commit_depth_update(memory, &depth, fragment_accepted);
+        if (depth_result != SR_OK) return depth_result;
 
         triangle_span_work_step(decoded, primitive, &cursor);
     }
@@ -459,8 +536,13 @@ rdp_span_kernel_kind pipeline_select_triangle_kernel(const rdp_primitive_state *
     if (primitive->fill_mode) {
         return RDP_SPAN_KERNEL_FILL_TRIANGLE;
     }
+    if (primitive->triangle.has_depth && !primitive->triangle.has_shade &&
+        !primitive->triangle.has_texture) {
+        return RDP_SPAN_KERNEL_DEPTH_TRIANGLE;
+    }
     if (primitive->triangle.has_shade && !primitive->triangle.has_texture) {
-        return primitive->triangle.has_depth ? RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE
+        return (primitive->triangle.has_depth || primitive->fragment.depth.source_primitive)
+            ? RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE
                                              : RDP_SPAN_KERNEL_SHADE_TRIANGLE;
     }
     return RDP_SPAN_KERNEL_TEXTURE_TRIANGLE;
@@ -484,7 +566,7 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
             .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
         };
         return pipeline_write_fragment(memory, primitive, x, y,
-                                       pipeline_shade_pixel(color_pipeline, &inputs).color, 0u);
+                                       pipeline_shade_pixel(color_pipeline, &inputs).color, 0u, NULL);
     }
 
     rdp_color texel0;
@@ -509,7 +591,7 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
         .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
     };
     pipeline_outputs outputs = pipeline_shade_pixel(color_pipeline, &inputs);
-    return pipeline_write_fragment(memory, primitive, x, y, outputs.color, 0u);
+    return pipeline_write_fragment(memory, primitive, x, y, outputs.color, 0u, NULL);
 }
 
 sr_result pipeline_render_rectangle_span(sr_memory *memory,

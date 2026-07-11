@@ -29,6 +29,7 @@ typedef struct rdp_span_work {
 typedef enum rdp_span_kernel_kind {
     RDP_SPAN_KERNEL_INVALID = 0,
     RDP_SPAN_KERNEL_FILL_TRIANGLE,
+    RDP_SPAN_KERNEL_DEPTH_TRIANGLE,
     RDP_SPAN_KERNEL_SHADE_TRIANGLE,
     RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE,
     RDP_SPAN_KERNEL_TEXTURE_TRIANGLE,
@@ -79,6 +80,10 @@ sr_result pipeline_render_fill_triangle_span(sr_memory *memory,
                                              const rdp_primitive_state *primitive,
                                              const rdp_span_work *work);
 
+sr_result pipeline_render_depth_triangle_span(sr_memory *memory,
+                                               const rdp_primitive_state *primitive,
+                                               const rdp_span_work *work);
+
 sr_result pipeline_render_shade_triangle_span(sr_memory *memory,
                                               const rdp_primitive_state *primitive,
                                               const rdp_span_work *work);
@@ -119,6 +124,8 @@ static inline sr_result pipeline_render_span(sr_memory *memory,
     switch (primitive->span_kernel) {
     case RDP_SPAN_KERNEL_FILL_TRIANGLE:
         return pipeline_render_fill_triangle_span(memory, primitive, work);
+    case RDP_SPAN_KERNEL_DEPTH_TRIANGLE:
+        return pipeline_render_depth_triangle_span(memory, primitive, work);
     case RDP_SPAN_KERNEL_SHADE_TRIANGLE:
         return pipeline_render_shade_triangle_span(memory, primitive, work);
     case RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE:
