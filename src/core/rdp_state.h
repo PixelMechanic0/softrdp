@@ -188,7 +188,6 @@ typedef struct rdp_depth_state {
     uint32_t image_address;
     uint16_t primitive_depth;
     uint16_t primitive_delta_z;
-    uint16_t pixel_delta_z;
     bool compare;
     bool update;
     bool source_primitive;

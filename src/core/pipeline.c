@@ -4,7 +4,6 @@
 #include "rdp_memory.h"
 #include "tmem.h"
 #include "blender.h"
-#include "depth.h"
 
 pipeline_outputs pipeline_shade_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs)
 {
@@ -267,44 +266,30 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
     }
     if (primitive->metrics) primitive->metrics->depth_tests++;
 
-    uint16_t old_compressed = rdp_depth_compress(0x3ffffu);
-    const uint32_t new_depth = depth->source_primitive
-        ? rdp_depth_from_primitive(depth->primitive_depth)
-        : rdp_depth_from_span(cursor->depth_fixed);
+    uint16_t old_depth = 0xffffu;
+    int64_t linear = cursor->depth_fixed;
+    uint16_t new_depth;
+    if (depth->source_primitive) {
+        new_depth = depth->primitive_depth & 0x7fffu;
+    } else if (linear <= 0) {
+        new_depth = 0u;
+    } else if (linear >= 0xffff0000ll) {
+        new_depth = 0xffffu;
+    } else {
+        new_depth = (uint16_t)((uint64_t)linear >> 16);
+    }
     const uint32_t pixel = (uint32_t)cursor->y * primitive->framebuffer.color_image.width + (uint32_t)x;
     const uint32_t addr = depth->image_address + pixel * 2u;
 
     if ((depth->compare || depth->update) &&
-        !sr_memory_read_be16(memory, addr, &old_compressed)) {
+        !sr_memory_read_be16(memory, addr, &old_depth)) {
         return SR_ERROR_INVALID_ARGUMENT;
     }
-    const uint32_t old_depth = rdp_depth_decompress(old_compressed);
-    if (depth->compare) {
-        const uint8_t old_dz_encoded = (uint8_t)((old_compressed & 3u) << 2);
-        uint32_t combined_dz = depth->pixel_delta_z |
-                               rdp_depth_decompress_delta(old_dz_encoded);
-        if (combined_dz) {
-            uint32_t power = 1u;
-            while (combined_dz >>= 1u) power <<= 1u;
-            combined_dz = power << 3u;
-        }
-
-        const bool max_depth = old_depth == 0x3ffffu;
-        const bool front = new_depth < old_depth;
-        const bool nearer = new_depth <= old_depth + combined_dz;
-        const bool farther = new_depth + combined_dz >= old_depth;
-        switch (primitive->fragment.z_mode & 3u) {
-        case 0: result->pass = max_depth || nearer; break;
-        case 1: result->pass = max_depth || nearer; break;
-        case 2: result->pass = max_depth || front; break;
-        default:result->pass = !max_depth && nearer && farther; break;
-        }
-    }
+    if (depth->compare) result->pass = new_depth <= old_depth;
     if (result->pass && depth->update) {
         result->update = true;
         result->address = addr;
-        result->compressed = rdp_depth_pack(new_depth,
-            rdp_depth_compress_delta(depth->pixel_delta_z));
+        result->compressed = new_depth;
         if (primitive->metrics) primitive->metrics->depth_updates_planned++;
     }
     if (primitive->metrics) {

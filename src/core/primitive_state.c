@@ -1,7 +1,6 @@
 #include "pipeline.h"
 
 #include "tmem.h"
-#include "depth.h"
 
 #include <string.h>
 
@@ -110,9 +109,6 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
                             metrics,
                             triangle->position.tile);
     primitive->triangle = *triangle;
-    primitive->fragment.depth.pixel_delta_z = primitive->fragment.depth.source_primitive
-        ? registers->primitive_delta_z
-        : rdp_depth_normalize_delta(triangle->depth.dzdx, triangle->depth.dzdy);
     primitive->fill_mode = fill_mode;
     primitive->span_kernel = pipeline_select_triangle_kernel(primitive);
 }
