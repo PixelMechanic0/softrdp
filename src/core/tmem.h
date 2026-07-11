@@ -31,20 +31,20 @@ typedef struct tmem_texel_address {
 void tmem_init(tmem_state *tmem);
 sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, rdp_metrics *metrics, const rdp_command *cmd);
 
-static inline uint32_t shift_tile_coord(uint32_t coord, uint8_t shift)
-{
-    if (shift < 11u) {
-        return coord >> shift;
-    }
-    if (shift < 16u) {
-        return coord << (16u - shift);
-    }
-    return coord;
-}
-
 static inline int32_t sign16_coord(int32_t value)
 {
     return (int16_t)(value & 0xffff);
+}
+
+static inline int32_t shift_tile_coord(int32_t coord, uint8_t shift)
+{
+    if (shift < 11u) {
+        return sign16_coord(coord) >> shift;
+    }
+    if (shift < 16u) {
+        return sign16_coord((int32_t)((uint32_t)coord << (16u - shift)));
+    }
+    return sign16_coord(coord);
 }
 
 static inline int32_t shift_tile_coord_fixed5(int32_t coord, uint8_t shift)
@@ -53,7 +53,7 @@ static inline int32_t shift_tile_coord_fixed5(int32_t coord, uint8_t shift)
         return sign16_coord(coord) >> shift;
     }
     if (shift < 16u) {
-        return sign16_coord(coord << (16u - shift));
+        return sign16_coord((int32_t)((uint32_t)coord << (16u - shift)));
     }
     return sign16_coord(coord);
 }
@@ -73,9 +73,15 @@ static inline uint32_t tmem_physical_word_byte(uint32_t byte)
     return ((byte >> 1) ^ 1u) << 1;
 }
 
-static inline bool resolve_tile_axis(uint32_t coord,
-                                     uint32_t lo,
-                                     uint32_t hi,
+static inline int32_t fixed5_floor_to_texel(int32_t coord)
+{
+    const int64_t value = coord;
+    return value >= 0 ? (int32_t)(value / 32) : (int32_t)-(((-value) + 31) / 32);
+}
+
+static inline bool resolve_tile_axis(int32_t coord,
+                                     int32_t lo,
+                                     int32_t hi,
                                      uint32_t extent,
                                      bool clamp,
                                      bool mirror,
@@ -90,22 +96,21 @@ static inline bool resolve_tile_axis(uint32_t coord,
         } else if (coord > hi) {
             relative = (int32_t)extent - 1;
         } else {
-            relative = (int32_t)(coord - lo);
+            relative = coord - lo;
         }
     } else {
-        relative = (int32_t)(coord - lo);
+        relative = coord - lo;
     }
 
     if (mask_bits) {
         const int32_t period = 1 << mask_bits;
+        const int32_t repeat_mask = mirror ? (period << 1) - 1 : period - 1;
+        relative &= repeat_mask;
         if (mirror) {
-            const int32_t mirror_bit = period;
-            const int32_t reflected = (relative & mirror_bit) - 1;
-            if (reflected > 0) {
-                relative ^= reflected;
+            if (relative & period) {
+                relative = ((period << 1) - 1) - relative;
             }
         }
-        relative &= period - 1;
     } else if (!clamp && (relative < 0 || relative >= (int32_t)extent)) {
         return false;
     }
@@ -240,8 +245,8 @@ static inline bool tmem_resolve_texel_address_raw(const rdp_tile *tile,
 
 static inline bool tmem_resolve_texel_coord(const tmem_state *tmem,
                                             const rdp_texture_sample_state *sample,
-                                            uint32_t s,
-                                            uint32_t t,
+                                            int32_t s,
+                                            int32_t t,
                                             uint32_t *local_s,
                                             uint32_t *local_t)
 {
@@ -305,20 +310,20 @@ static inline bool tmem_resolve_texel_coord_fixed5(const tmem_state *tmem,
 
     const int32_t s_relative = s_fixed - ((int32_t)tile->sl << 3);
     const int32_t t_relative = t_fixed - ((int32_t)tile->tl << 3);
-    const uint32_t s_texel = s_relative <= 0 ? 0u : (uint32_t)s_relative >> 5;
-    const uint32_t t_texel = t_relative <= 0 ? 0u : (uint32_t)t_relative >> 5;
+    const int32_t s_texel = fixed5_floor_to_texel(s_relative);
+    const int32_t t_texel = fixed5_floor_to_texel(t_relative);
 
     return resolve_tile_axis(s_texel,
-                             0u,
-                             bounds->sh >= bounds->sl ? bounds->sh - bounds->sl : 0u,
+                             0,
+                             bounds->sh >= bounds->sl ? (int32_t)(bounds->sh - bounds->sl) : 0,
                              width,
                              tile->clamp_s != 0 || tile->mask_s == 0,
                              tile->mirror_s != 0,
                              tile->mask_s,
                              local_s) &&
            resolve_tile_axis(t_texel,
-                             0u,
-                             bounds->th >= bounds->tl ? bounds->th - bounds->tl : 0u,
+                             0,
+                             bounds->th >= bounds->tl ? (int32_t)(bounds->th - bounds->tl) : 0,
                              height,
                              tile->clamp_t != 0 || tile->mask_t == 0,
                              tile->mirror_t != 0,
@@ -355,7 +360,7 @@ static inline bool tmem_resolve_texel_address(const tmem_state *tmem,
                                           address);
 }
 
-static inline bool tmem_sample_rgba5551(const tmem_state *tmem, const rdp_texture_sample_state *sample, uint32_t s, uint32_t t, uint16_t *texel)
+static inline bool tmem_sample_rgba5551(const tmem_state *tmem, const rdp_texture_sample_state *sample, int32_t s, int32_t t, uint16_t *texel)
 {
     if (!texel) {
         return false;
@@ -512,7 +517,7 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
     }
 }
 
-static inline bool tmem_sample_color(const tmem_state *tmem, const rdp_texture_sample_state *sample, uint32_t s, uint32_t t, rdp_color *color)
+static inline bool tmem_sample_color(const tmem_state *tmem, const rdp_texture_sample_state *sample, int32_t s, int32_t t, rdp_color *color)
 {
     if (!color || !sample || sample->tile_index >= 8) {
         return false;
@@ -548,8 +553,8 @@ static inline bool tmem_sample_color_fixed5(const tmem_state *tmem, const rdp_te
         const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed, tile->shift_t);
         const int32_t rel_s = shifted_s - ((int32_t)tile->sl << 3);
         const int32_t rel_t = shifted_t - ((int32_t)tile->tl << 3);
-        const uint32_t frac_s = rel_s <= 0 ? 0u : (uint32_t)rel_s & 31u;
-        const uint32_t frac_t = rel_t <= 0 ? 0u : (uint32_t)rel_t & 31u;
+        const uint32_t frac_s = (uint32_t)rel_s & 31u;
+        const uint32_t frac_t = (uint32_t)rel_t & 31u;
 
         if (tmem_resolve_texel_coord_fixed5(tmem, sample, s_fixed + 32, t_fixed, &local_s1, &local_t) &&
             tmem_resolve_texel_coord_fixed5(tmem, sample, s_fixed, t_fixed + 32, &local_s, &local_t1) &&

@@ -49,9 +49,17 @@ static inline rdp_color shade_base_color(const raster_shade_setup *shade)
 
 static int32_t perspective_divide_coord(int32_t coord, int32_t w)
 {
-    if (w <= 0) return 0;
-    int64_t divided = ((int64_t)coord << 16) / (int64_t)w;
-    return divided < 0 ? 0 : (divided > INT32_MAX ? INT32_MAX : (int32_t)divided);
+    if (w == 0) {
+        return coord < 0 ? INT32_MIN : INT32_MAX;
+    }
+    const int64_t divided = ((int64_t)coord * 65536ll) / (int64_t)w;
+    if (divided < INT32_MIN) {
+        return INT32_MIN;
+    }
+    if (divided > INT32_MAX) {
+        return INT32_MAX;
+    }
+    return (int32_t)divided;
 }
 
 static uint32_t texture_coord_to_texel(int32_t value)
@@ -405,8 +413,8 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
                                         const rdp_texture_sample_state *texture,
                                         const rdp_color_pipeline_state *color_pipeline,
                                         rdp_metrics *metrics,
-                                        uint32_t s,
-                                        uint32_t t,
+                                        int32_t s_fixed,
+                                        int32_t t_fixed,
                                         uint32_t x,
                                         uint32_t y)
 {
@@ -418,7 +426,7 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
     if (metrics) {
         metrics->rect_texture_sample_attempts++;
     }
-    if (!tmem_sample_color(tmem, texture, s, t, &texel0)) {
+    if (!tmem_sample_color_fixed5(tmem, texture, s_fixed, t_fixed, &texel0)) {
         if (metrics) {
             metrics->rect_texture_sample_misses++;
         }
@@ -447,16 +455,14 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
     int32_t s_fixed = work->s_fixed;
     int32_t t_fixed = work->t_fixed;
     for (int x = work->x_begin; x <= work->x_end; x++) {
-        const uint32_t s = s_fixed < 0 ? 0u : (uint32_t)s_fixed >> 5;
-        const uint32_t t = t_fixed < 0 ? 0u : (uint32_t)t_fixed >> 5;
         sr_result result = render_rectangle_pixel(memory,
                                                   primitive->tmem,
                                                   &primitive->framebuffer,
                                                   &primitive->texture,
                                                   &primitive->color,
                                                   primitive->metrics,
-                                                  s,
-                                                  t,
+                                                  s_fixed,
+                                                  t_fixed,
                                                   (uint32_t)x,
                                                   (uint32_t)work->y);
         if (result != SR_OK) {
