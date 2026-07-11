@@ -83,6 +83,14 @@ sr_result framebuffer_fill_rect(sr_memory *memory, const rdp_framebuffer_state *
     if (x1 >= state->color_image.width) x1 = state->color_image.width - 1u;
 
     switch (state->color_image.size) {
+    case RDP_SIZE_8BPP:
+        for (uint32_t y = y0; y <= y1; y++) {
+            for (uint32_t x = x0; x <= x1; x++) {
+                const sr_result result = framebuffer_write_fill_pixel(memory, state, x, y);
+                if (result != SR_OK) return result;
+            }
+        }
+        return SR_OK;
     case RDP_SIZE_16BPP:
         return fill_rect_16(memory, state, x0, y0, x1, y1) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     case RDP_SIZE_32BPP:

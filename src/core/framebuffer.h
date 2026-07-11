@@ -36,6 +36,11 @@ static inline sr_result framebuffer_write_rgba5551(sr_memory *memory, const rdp_
     if (!memory || !state || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     const uint32_t pixel = y * state->color_image.width + x;
     switch (state->color_image.size) {
+    case RDP_SIZE_8BPP: {
+        const rdp_color color = pipeline_rgba5551_to_color(texel);
+        const uint8_t value = (pixel & 1u) ? color.g : color.r;
+        return sr_memory_write_u8(memory, state->color_image.address + pixel, value) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+    }
     case RDP_SIZE_16BPP: return sr_memory_write_be16(memory, state->color_image.address + pixel * 2u, texel) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     case RDP_SIZE_32BPP: return sr_memory_write_be32(memory, state->color_image.address + pixel * 4u, pipeline_color_to_rgba8888(pipeline_rgba5551_to_color(texel))) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     default:             return SR_ERROR_UNSUPPORTED;
@@ -47,6 +52,12 @@ static inline sr_result framebuffer_write_color(sr_memory *memory, const rdp_fra
     if (!memory || !state || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     const uint32_t pixel = y * state->color_image.width + x;
     switch (state->color_image.size) {
+    /* The 8-bit framebuffer packs the red and green blender outputs on the
+     * two pixel lanes.  This is observable for scratch images. */
+    case RDP_SIZE_8BPP: {
+        const uint8_t value = (pixel & 1u) ? color.g : color.r;
+        return sr_memory_write_u8(memory, state->color_image.address + pixel, value) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+    }
     case RDP_SIZE_16BPP: return sr_memory_write_be16(memory, state->color_image.address + pixel * 2u, pipeline_color_to_rgba5551(color)) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     case RDP_SIZE_32BPP: return sr_memory_write_be32(memory, state->color_image.address + pixel * 4u, pipeline_color_to_rgba8888(color)) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     default:             return SR_ERROR_UNSUPPORTED;
@@ -58,6 +69,12 @@ static inline sr_result framebuffer_read_color(sr_memory *memory, const rdp_fram
 {
     if (!memory || !state || !color || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     const uint32_t pixel = y * state->color_image.width + x;
+    if (state->color_image.size == RDP_SIZE_8BPP) {
+        uint8_t value;
+        if (!sr_memory_read_u8(memory, state->color_image.address + pixel, &value)) return SR_ERROR_INVALID_ARGUMENT;
+        *color = (rdp_color){ value, value, value, 0xe0u };
+        return SR_OK;
+    }
     if (state->color_image.size == RDP_SIZE_16BPP) {
         uint16_t value;
         if (!sr_memory_read_be16(memory, state->color_image.address + pixel * 2u, &value)) return SR_ERROR_INVALID_ARGUMENT;
@@ -95,6 +112,12 @@ static inline sr_result framebuffer_write_fill_pixel(sr_memory *memory, const rd
 {
     if (!memory || !state || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
     switch (state->color_image.size) {
+    case RDP_SIZE_8BPP: {
+        const uint32_t pixel = y * state->color_image.width + x;
+        const uint32_t shift = ((state->color_image.address + pixel) & 3u) ^ 3u;
+        const uint8_t value = (uint8_t)(state->fill_color >> (shift * 8u));
+        return sr_memory_write_u8(memory, state->color_image.address + pixel, value) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+    }
     case RDP_SIZE_16BPP: return write_fill_pixel_16(memory, state, x, y) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     case RDP_SIZE_32BPP: return write_fill_pixel_32(memory, state, x, y) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     default:             return SR_ERROR_UNSUPPORTED;
