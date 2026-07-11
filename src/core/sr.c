@@ -197,6 +197,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
     uint32_t current;
     uint32_t end;
     bool xbus_dma;
+    bool full_sync_seen = false;
 
     current = read_reg(ctx->host.dp_regs, SR_DP_CURRENT) & ~7u;
     end = read_reg(ctx->host.dp_regs, SR_DP_END) & ~7u;
@@ -213,7 +214,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
     }
     if (end - current > MAX_RDP_LIST_BYTES) {
         ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-        finish_rdp_list(ctx, end, true);
+        finish_rdp_list(ctx, end, false);
         return SR_ERROR_BAD_COMMAND;
     }
 
@@ -225,7 +226,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         if (!read_command_word(ctx, xbus_dma, current_word, &first_word)) {
             ctx->debug.last_command_address = current;
             ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-            finish_rdp_list(ctx, end, true);
+            finish_rdp_list(ctx, end, false);
             return SR_ERROR_BAD_COMMAND;
         }
 
@@ -235,14 +236,14 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         cmd.word_count = rdp_command_word_count(cmd.id);
         if (cmd.word_count == 0 || cmd.word_count > SR_MAX_COMMAND_WORDS) {
             ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-            finish_rdp_list(ctx, end, true);
+            finish_rdp_list(ctx, end, false);
             return SR_ERROR_BAD_COMMAND;
         }
 
         for (uint8_t i = 0; i < cmd.word_count; i++) {
             if (!read_command_word(ctx, xbus_dma, current_word + i, &cmd.words[i])) {
                 ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-                finish_rdp_list(ctx, end, true);
+                finish_rdp_list(ctx, end, false);
                 return SR_ERROR_BAD_COMMAND;
             }
         }
@@ -255,15 +256,22 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         if (result != SR_OK) {
             ctx->debug.last_result = result;
             capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
-            finish_rdp_list(ctx, end, true);
+            finish_rdp_list(ctx, end, false);
             return result;
         }
+        if (cmd.id == RDP_CMD_SYNC_FULL) {
+            full_sync_seen = true;
+        }
+        ctx->debug.color_image_format = (uint32_t)ctx->rdp.color_image.format;
+        ctx->debug.color_image_size = (uint32_t)ctx->rdp.color_image.size;
+        ctx->debug.color_image_width = ctx->rdp.color_image.width;
+        ctx->debug.color_image_address = ctx->rdp.color_image.address;
         capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
 
         current += (uint32_t)cmd.word_count * 4u;
     }
 
-    finish_rdp_list(ctx, end, true);
+    finish_rdp_list(ctx, end, full_sync_seen);
     return SR_OK;
 }
 

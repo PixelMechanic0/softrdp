@@ -15,6 +15,10 @@ typedef struct sr_debug_stats {
     uint32_t last_command_address;
     uint32_t last_command_id;
     sr_result last_result;
+    uint32_t color_image_format;
+    uint32_t color_image_size;
+    uint32_t color_image_width;
+    uint32_t color_image_address;
     uint32_t last_texture_image_format;
     uint32_t last_texture_image_size;
     uint32_t last_texture_image_width;

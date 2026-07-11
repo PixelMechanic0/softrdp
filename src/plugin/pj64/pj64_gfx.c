@@ -694,8 +694,8 @@ void PJ64_CALL ProcessRDPList(void)
         if (PJ64_LOG_ENABLED &&
             (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
              (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)) ||
-             (!SOFTRDP_ENABLE_PERF_LOG && stats.draw_calls_seen != g_last_logged_draws))) {
-            pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s commands=%llu draws=%llu",
+             stats.draw_calls_seen != g_last_logged_draws)) {
+            pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s commands=%llu draws=%llu ci=%08x/%ux%u/%u",
                               g_process_rdp_calls,
                               result_name(result),
                               stats.last_list_current,
@@ -705,7 +705,11 @@ void PJ64_CALL ProcessRDPList(void)
                               stats.last_command_id,
                               rdp_command_name((rdp_command_id)stats.last_command_id),
                               (unsigned long long)stats.commands_seen,
-                              (unsigned long long)stats.draw_calls_seen);
+                              (unsigned long long)stats.draw_calls_seen,
+                              stats.color_image_address,
+                              stats.color_image_width,
+                              stats.color_image_size,
+                              stats.color_image_format);
             if (result != SR_OK) {
                 log_texture_debug(&stats);
             } else if (command_has_texture_debug(stats.last_command_id)) {

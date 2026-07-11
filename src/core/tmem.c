@@ -116,13 +116,11 @@ static sr_result load_16bpp_block(tmem_state *tmem, sr_memory *memory, const rdp
     }
 
     const uint32_t tmem16_base = tile->tmem >> 1;
-    const uint32_t stride64 = tile->line >> 3;
     const uint32_t group_count = (texel_count + 3u) >> 2;
     uint32_t last_row = 0;
 
     for (uint32_t group = 0; group < group_count; group++) {
         const uint32_t dxt_row = (group * dxt) >> 11;
-        const uint32_t dst_word64 = group + dxt_row * stride64;
         last_row = dxt_row;
 
         for (uint32_t lane = 0; lane < 4u; lane++) {
@@ -133,7 +131,7 @@ static sr_result load_16bpp_block(tmem_state *tmem, sr_memory *memory, const rdp
             const uint32_t src_pixel = tl * state->texture_image.width + sl + x;
             const uint32_t src_addr = state->texture_image.address + src_pixel * 2u;
             const uint32_t dst_lane = lane ^ ((dxt_row & 1u) << 1);
-            const uint32_t dst_tmem16 = (tmem16_base + (dst_word64 << 2) + dst_lane) & 0x7ffu;
+            const uint32_t dst_tmem16 = (tmem16_base + (group << 2) + dst_lane) & 0x7ffu;
             const uint32_t dst_addr = (dst_tmem16 ^ 1u) << 1;
 
             if (!sr_memory_read_be16(memory, src_addr, &texel) ||
