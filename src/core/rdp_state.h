@@ -179,6 +179,7 @@ typedef struct rdp_texture_sample_state {
     uint8_t tile_index;
     bool perspective;
     bool tlut_enable;
+    bool tlut_ia;
     bool bilerp;
     bool sample_quad;
     bool mid_texel;

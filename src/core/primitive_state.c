@@ -53,6 +53,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->texture.tile = registers->tiles[primitive->texture.tile_index];
     primitive->texture.perspective = registers->other_modes.perspective;
     primitive->texture.tlut_enable = registers->other_modes.tlut_enable;
+    primitive->texture.tlut_ia = registers->other_modes.tlut_ia;
     primitive->texture.bilerp = registers->other_modes.bilerp0;
     primitive->texture.sample_quad = registers->other_modes.sample_quad;
     primitive->texture.mid_texel = registers->other_modes.mid_texel;

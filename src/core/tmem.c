@@ -15,6 +15,10 @@ void tmem_init(tmem_state *tmem)
     memset(tmem, 0, sizeof(*tmem));
 }
 
+static void record_loaded_tile(tmem_state *tmem, uint32_t tile_index,
+                               uint32_t width, uint32_t height, uint32_t stride,
+                               uint32_t sl, uint32_t tl, uint32_t sh, uint32_t th);
+
 static bool texture_state_supports_load(const rdp_state *state, const rdp_tile *tile)
 {
     if (state->texture_image.format != tile->format ||
@@ -27,10 +31,46 @@ static bool texture_state_supports_load(const rdp_state *state, const rdp_tile *
     }
 
     if (tile->format == RDP_FORMAT_IA) {
-        return tile->size == RDP_SIZE_16BPP;
+        return tile->size == RDP_SIZE_8BPP || tile->size == RDP_SIZE_16BPP;
+    }
+
+    if (tile->format == RDP_FORMAT_CI || tile->format == RDP_FORMAT_I) {
+        return tile->size == RDP_SIZE_8BPP;
     }
 
     return false;
+}
+
+static sr_result load_8bpp_tile(tmem_state *tmem, sr_memory *memory,
+                                const rdp_state *state, const rdp_tile *tile,
+                                const rdp_command *cmd)
+{
+    const uint32_t tile_index = cmd->decoded.load.tile_index;
+    const uint32_t sl = cmd->decoded.load.sl >> 2;
+    const uint32_t tl = cmd->decoded.load.tl >> 2;
+    const uint32_t sh = cmd->decoded.load.sh >> 2;
+    const uint32_t th = cmd->decoded.load.th >> 2;
+    if (sh < sl || th < tl) return SR_ERROR_INVALID_ARGUMENT;
+
+    const uint32_t width = sh - sl + 1u;
+    const uint32_t height = th - tl + 1u;
+    const uint32_t stride = tile->line ? tile->line : tmem_align_row_stride(width);
+    for (uint32_t y = 0; y < height; y++) {
+        for (uint32_t x = 0; x < width; x++) {
+            tmem_texel_address dst;
+            uint8_t texel;
+            const uint32_t src_pixel = (tl + y) * state->texture_image.width + sl + x;
+            if (!sr_memory_read_u8(memory, state->texture_image.address + src_pixel, &texel) ||
+                !tmem_resolve_texel_address_raw(tile, stride, x, y, &dst) ||
+                dst.bytes != 1u || dst.byte >= SR_TMEM_SIZE) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
+            tmem->bytes[dst.byte] = texel;
+        }
+    }
+
+    record_loaded_tile(tmem, tile_index, width, height, stride, sl, tl, sh, th);
+    return SR_OK;
 }
 
 static void record_loaded_tile(tmem_state *tmem,
@@ -146,6 +186,35 @@ static sr_result load_16bpp_block(tmem_state *tmem, sr_memory *memory, const rdp
     return SR_OK;
 }
 
+static sr_result load_tlut(tmem_state *tmem, sr_memory *memory,
+                           const rdp_state *state, const rdp_tile *tile,
+                           const rdp_command *cmd)
+{
+    if (state->texture_image.size != RDP_SIZE_16BPP) return SR_ERROR_UNSUPPORTED;
+
+    const uint32_t sl = cmd->decoded.load.sl >> 2;
+    const uint32_t tl = cmd->decoded.load.tl >> 2;
+    const uint32_t sh = cmd->decoded.load.sh >> 2;
+    if (sh < sl) return SR_ERROR_INVALID_ARGUMENT;
+
+    const uint32_t count = sh - sl + 1u;
+    const uint32_t base = tile->tmem & 0xfffu;
+    for (uint32_t i = 0; i < count; i++) {
+        uint16_t entry;
+        const uint32_t src_pixel = tl * state->texture_image.width + sl + i;
+        if (!sr_memory_read_be16(memory, state->texture_image.address + src_pixel * 2u, &entry))
+            return SR_ERROR_INVALID_ARGUMENT;
+
+        const uint32_t dst = (base + i * 8u) & 0xfffu;
+        for (uint32_t lane = 0; lane < 8u; lane += 2u) {
+            if (!tmem_write_be16(tmem, (dst + lane) & 0xfffu, entry))
+                return SR_ERROR_INVALID_ARGUMENT;
+        }
+    }
+    tmem->loads_seen++;
+    return SR_OK;
+}
+
 static sr_result load_rgba32_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_tile *tile, const rdp_command *cmd)
 {
     const uint32_t tile_index = cmd->decoded.load.tile_index;
@@ -221,19 +290,32 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem,
     (void)metrics;
 #endif
 
-    if (!texture_state_supports_load(state, tile)) {
-        return SR_ERROR_UNSUPPORTED;
+    if (cmd->id == RDP_CMD_LOAD_TLUT) {
+        return load_tlut(tmem, memory, state, tile, cmd);
     }
 
     if (cmd->id == RDP_CMD_LOAD_BLOCK) {
-        if (tile->size != RDP_SIZE_16BPP) {
+        /* LoadBlock is a transfer operation. The load tile describes the
+         * transfer width; a later render tile may reinterpret the same TMEM
+         * bytes with a different format or texel size. */
+        if (state->texture_image.size != RDP_SIZE_16BPP ||
+            tile->size != RDP_SIZE_16BPP ||
+            state->texture_image.format != tile->format) {
             return SR_ERROR_UNSUPPORTED;
         }
         return load_16bpp_block(tmem, memory, state, tile, cmd);
     }
 
+    if (!texture_state_supports_load(state, tile)) {
+        return SR_ERROR_UNSUPPORTED;
+    }
+
     if (tile->size == RDP_SIZE_32BPP) {
         return load_rgba32_tile(tmem, memory, state, tile, cmd);
+    }
+
+    if (tile->size == RDP_SIZE_8BPP) {
+        return load_8bpp_tile(tmem, memory, state, tile, cmd);
     }
 
     return load_16bpp_tile(tmem, memory, state, tile, cmd);

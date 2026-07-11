@@ -451,6 +451,31 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         return false;
     }
 
+    if (tile->format == RDP_FORMAT_CI && sample->tlut_enable) {
+        uint32_t index;
+        if (tile->size == RDP_SIZE_4BPP && address.bytes == 1) {
+            const uint8_t packed = tmem->bytes[address.byte];
+            index = ((uint32_t)tile->palette << 4) |
+                    (address.subtexel ? (packed & 0xfu) : (packed >> 4));
+        } else if (tile->size == RDP_SIZE_8BPP && address.bytes == 1) {
+            index = tmem->bytes[address.byte];
+        } else {
+            return false;
+        }
+
+        const uint32_t palette_addr = 0x800u + index * 8u;
+        if (palette_addr + 1u >= SR_TMEM_SIZE) return false;
+        const uint16_t entry = ((uint16_t)tmem->bytes[palette_addr] << 8) |
+                               (uint16_t)tmem->bytes[palette_addr + 1u];
+        if (sample->tlut_ia) {
+            const uint8_t intensity = (uint8_t)(entry >> 8);
+            *color = (rdp_color){ intensity, intensity, intensity, (uint8_t)entry };
+        } else {
+            *color = pipeline_rgba5551_to_color(entry);
+        }
+        return true;
+    }
+
     if (tile->format == RDP_FORMAT_IA) {
         switch (tile->size) {
         case RDP_SIZE_8BPP: {
