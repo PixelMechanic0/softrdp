@@ -295,7 +295,7 @@ sr_result raster_submit_triangle(sr_memory *memory,
 
         rdp_span_work work;
         pipeline_setup_triangle_span(&primitive, span.x0, span.x1, y, &work);
-        result = pipeline_render_triangle_span(memory, &primitive, &work);
+        result = pipeline_render_span(memory, &primitive, &work);
         if (result != SR_OK) {
 #if SOFTRDP_ENABLE_PERF_LOG
             QueryPerformanceCounter(&end);
@@ -363,12 +363,10 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
                                       (int)y,
                                       s_fixed,
                                       t_fixed,
+                                      span_dsdx,
+                                      span_dtdx,
                                       &work);
-        sr_result result = pipeline_render_rectangle_span(memory,
-                                                          &primitive,
-                                                          &work,
-                                                          span_dsdx,
-                                                          span_dtdx);
+        sr_result result = pipeline_render_span(memory, &primitive, &work);
         if (result != SR_OK) {
             return result;
         }
