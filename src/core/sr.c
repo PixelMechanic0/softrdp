@@ -22,6 +22,8 @@ struct sr_context {
     rdp_state rdp;
     tmem_state tmem;
     vi_state vi;
+    vi_scanout_plan vi_plan;
+    bool vi_plan_prepared;
     rdp_metrics metrics;
     sr_debug_stats debug;
 };
@@ -174,6 +176,7 @@ sr_context *sr_create(const sr_host_interface *host)
 
 void sr_destroy(sr_context *ctx)
 {
+    if (!ctx) return;
     free(ctx);
 }
 
@@ -289,6 +292,9 @@ sr_result sr_process_rdp_list(sr_context *ctx)
 #endif
 
     sr_result result = sr_process_rdp_list_internal(ctx);
+    if (result == SR_OK) {
+        vi_latch_registers(&ctx->vi, &ctx->host);
+    }
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
@@ -300,18 +306,22 @@ sr_result sr_process_rdp_list(sr_context *ctx)
 
 sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
 {
-    if (!ctx) {
+    if (!ctx || !out) {
         return SR_ERROR_INVALID_ARGUMENT;
     }
 
-    vi_latch_registers(&ctx->vi, &ctx->host);
+    if (!ctx->vi_plan_prepared) {
+        vi_latch_registers(&ctx->vi, &ctx->host);
+        vi_build_scanout_plan(&ctx->vi, &ctx->memory, &ctx->vi_plan);
+    }
+    ctx->vi_plan_prepared = false;
 
 #if SOFTRDP_ENABLE_PERF_LOG
     LARGE_INTEGER start, end;
     QueryPerformanceCounter(&start);
 #endif
 
-    sr_result result = vi_scanout(&ctx->vi, &ctx->memory, out);
+    sr_result result = vi_execute_scanout(&ctx->vi_plan, &ctx->memory, out);
 
 #if SOFTRDP_ENABLE_PERF_LOG
     QueryPerformanceCounter(&end);
@@ -319,6 +329,18 @@ sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
 #endif
 
     return result;
+}
+
+sr_result sr_get_vi_frame_info(sr_context *ctx, sr_vi_frame_info *info)
+{
+    if (!ctx || !info) return SR_ERROR_INVALID_ARGUMENT;
+    vi_latch_registers(&ctx->vi, &ctx->host);
+    vi_build_scanout_plan(&ctx->vi, &ctx->memory, &ctx->vi_plan);
+    ctx->vi_plan_prepared = true;
+    info->width = ctx->vi_plan.output_width;
+    info->height = ctx->vi_plan.output_height;
+    info->display = ctx->vi_plan.state == VI_SCANOUT_READY;
+    return SR_OK;
 }
 
 sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
@@ -366,6 +388,14 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
         stats.rect_texture_sample_attempts = ctx->metrics.rect_texture_sample_attempts;
         stats.rect_texture_sample_hits = ctx->metrics.rect_texture_sample_hits;
         stats.rect_texture_sample_misses = ctx->metrics.rect_texture_sample_misses;
+        stats.fragment_attempts = ctx->metrics.fragment_attempts;
+        stats.fragment_alpha_rejects = ctx->metrics.fragment_alpha_rejects;
+        stats.fragment_depth_tests = ctx->metrics.fragment_depth_tests;
+        stats.fragment_depth_rejects = ctx->metrics.fragment_depth_rejects;
+        stats.fragment_writes = ctx->metrics.fragment_writes;
+        stats.fragment_color_xor = ctx->metrics.fragment_color_xor;
+        stats.fragment_min_address = ctx->metrics.fragment_min_address;
+        stats.fragment_max_address = ctx->metrics.fragment_max_address;
         stats.tex_load_block_count = ctx->metrics.tex_load_block_count;
         stats.tex_load_tile_count = ctx->metrics.tex_load_tile_count;
         stats.tex_load_tlut_count = ctx->metrics.tex_load_tlut_count;

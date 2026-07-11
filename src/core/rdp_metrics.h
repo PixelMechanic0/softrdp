@@ -43,6 +43,14 @@ typedef struct rdp_metrics {
     uint64_t rect_texture_sample_attempts;
     uint64_t rect_texture_sample_hits;
     uint64_t rect_texture_sample_misses;
+    uint64_t fragment_attempts;
+    uint64_t fragment_alpha_rejects;
+    uint64_t fragment_depth_tests;
+    uint64_t fragment_depth_rejects;
+    uint64_t fragment_writes;
+    uint32_t fragment_color_xor;
+    uint32_t fragment_min_address;
+    uint32_t fragment_max_address;
     uint64_t tex_load_block_count;
     uint64_t tex_load_tile_count;
     uint64_t tex_load_tlut_count;

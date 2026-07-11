@@ -6,6 +6,12 @@
 
 typedef struct sr_context sr_context;
 
+typedef struct sr_vi_frame_info {
+    uint32_t width;
+    uint32_t height;
+    bool display;
+} sr_vi_frame_info;
+
 typedef struct sr_debug_stats {
     uint64_t commands_seen;
     uint64_t draw_calls_seen;
@@ -73,6 +79,14 @@ typedef struct sr_debug_stats {
     uint64_t rect_texture_sample_attempts;
     uint64_t rect_texture_sample_hits;
     uint64_t rect_texture_sample_misses;
+    uint64_t fragment_attempts;
+    uint64_t fragment_alpha_rejects;
+    uint64_t fragment_depth_tests;
+    uint64_t fragment_depth_rejects;
+    uint64_t fragment_writes;
+    uint32_t fragment_color_xor;
+    uint32_t fragment_min_address;
+    uint32_t fragment_max_address;
     uint64_t tex_load_block_count;
     uint64_t tex_load_tile_count;
     uint64_t tex_load_tlut_count;
@@ -86,6 +100,7 @@ void sr_destroy(sr_context *ctx);
 
 void sr_set_host(sr_context *ctx, const sr_host_interface *host);
 sr_result sr_process_rdp_list(sr_context *ctx);
+sr_result sr_get_vi_frame_info(sr_context *ctx, sr_vi_frame_info *info);
 sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out);
 sr_debug_stats sr_get_debug_stats(const sr_context *ctx);
 

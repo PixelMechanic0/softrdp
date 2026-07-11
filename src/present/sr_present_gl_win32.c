@@ -350,6 +350,21 @@ void sr_present_draw(sr_present *present)
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (present->has_frame) {
+        /* VI dimensions describe pixels, not a request to stretch them to
+         * the host window. Keep the image's aspect ratio and letterbox. */
+        int viewport_width = width;
+        int viewport_height = height;
+        if (present->frame_width && present->frame_height && width > 0 && height > 0) {
+            const double window_aspect = (double)width / (double)height;
+            const double frame_aspect = (double)present->frame_width / (double)present->frame_height;
+            if (window_aspect > frame_aspect) {
+                viewport_width = (int)((double)height * frame_aspect);
+            } else {
+                viewport_height = (int)((double)width / frame_aspect);
+            }
+        }
+        glViewport((width - viewport_width) / 2, (height - viewport_height) / 2,
+                   viewport_width, viewport_height);
         p_glUseProgram(present->program);
         p_glBindVertexArray(present->vao);
         glBindTexture(GL_TEXTURE_2D, present->texture);

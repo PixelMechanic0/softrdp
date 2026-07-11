@@ -11,6 +11,8 @@ sr_result fragment_finish(sr_memory *memory,
                           bool *accepted)
 {
     if (accepted) *accepted = false;
+    rdp_metrics *metrics = primitive->metrics;
+    if (metrics) metrics->fragment_attempts++;
     const rdp_fragment_state *state = &primitive->fragment;
     rdp_fragment fragment = {
         .color = pixel, .alpha = pixel.a, .coverage = 8u,
@@ -22,8 +24,10 @@ sr_result fragment_finish(sr_memory *memory,
     }
     if (state->alpha_cvg_select && !state->cvg_times_alpha)
         fragment.alpha = (uint16_t)fragment.coverage << 5;
-    if (state->blend.alpha_compare && fragment.alpha < state->blend.blend_color.a)
+    if (state->blend.alpha_compare && fragment.alpha < state->blend.blend_color.a) {
+        if (metrics) metrics->fragment_alpha_rejects++;
         return SR_OK;
+    }
 
     rdp_memory_pixel memory_pixel;
     const sr_result read = framebuffer_read_memory_pixel(memory, &primitive->framebuffer,
@@ -50,6 +54,21 @@ sr_result fragment_finish(sr_memory *memory,
     fragment.color.a = (uint8_t)((final_coverage << 5) | 0x1fu);
     const sr_result result = framebuffer_write_color(memory, &primitive->framebuffer,
                                                      x, y, fragment.color);
+    if (result == SR_OK && metrics) {
+        const uint32_t bpp = primitive->framebuffer.color_image.size == RDP_SIZE_32BPP ? 4u :
+                             primitive->framebuffer.color_image.size == RDP_SIZE_16BPP ? 2u : 1u;
+        const uint32_t address = primitive->framebuffer.color_image.address +
+                                 (y * primitive->framebuffer.color_image.width + x) * bpp;
+        if (metrics->fragment_writes == 0 || address < metrics->fragment_min_address)
+            metrics->fragment_min_address = address;
+        if (metrics->fragment_writes == 0 || address > metrics->fragment_max_address)
+            metrics->fragment_max_address = address;
+        metrics->fragment_color_xor ^= ((uint32_t)fragment.color.r << 24) |
+                                       ((uint32_t)fragment.color.g << 16) |
+                                       ((uint32_t)fragment.color.b << 8) |
+                                       fragment.color.a;
+        metrics->fragment_writes++;
+    }
     if (result == SR_OK && accepted) *accepted = true;
     return result;
 }

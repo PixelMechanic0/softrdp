@@ -224,7 +224,13 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
         !sr_memory_read_be16(memory, addr, &old_depth)) {
         return SR_ERROR_INVALID_ARGUMENT;
     }
-    if (depth->compare) result->pass = new_depth <= old_depth;
+    if (depth->compare) {
+        result->pass = new_depth <= old_depth;
+        if (primitive->metrics) {
+            primitive->metrics->fragment_depth_tests++;
+            if (!result->pass) primitive->metrics->fragment_depth_rejects++;
+        }
+    }
     if (result->pass && depth->update) {
         result->update = true;
         result->address = addr;
