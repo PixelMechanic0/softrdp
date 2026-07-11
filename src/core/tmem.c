@@ -108,43 +108,43 @@ static sr_result load_16bpp_block(tmem_state *tmem, sr_memory *memory, const rdp
     const uint32_t sl = cmd->decoded.load.sl;
     const uint32_t tl = cmd->decoded.load.tl;
     const uint32_t sh = cmd->decoded.load.sh;
-    const uint32_t dxt = cmd->decoded.load.th;
-
-    if (sh < sl) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
+    const uint32_t dxt = cmd->decoded.load.dxt;
 
     const uint32_t texel_count = ((sh - sl) + 1u) & 0xfffu;
     if (texel_count == 0) {
-        return SR_ERROR_INVALID_ARGUMENT;
+        return SR_OK;
     }
 
-    const uint32_t start_s = sl >> 2;
-    const uint32_t start_t = tl >> 2;
     const uint32_t tmem16_base = tile->tmem >> 1;
     const uint32_t stride64 = tile->line >> 3;
+    const uint32_t group_count = (texel_count + 3u) >> 2;
+    uint32_t last_row = 0;
 
-    for (uint32_t x = 0; x < texel_count; x++) {
-        uint16_t texel;
-        const uint32_t src_group = x >> 2;
-        const uint32_t dxt_row = dxt ? ((src_group * dxt) >> 11) : 0u;
-        const uint32_t src_pixel = start_t * state->texture_image.width + start_s + x;
-        const uint32_t src_addr = state->texture_image.address + src_pixel * 2u;
-        const uint32_t dst_word64 = src_group + dxt_row * stride64;
-        const uint32_t dst_lane = (x & 3u) ^ ((dxt_row & 1u) << 1);
-        const uint32_t dst_tmem16 = (tmem16_base + (dst_word64 << 2) + dst_lane) & 0x7ffu;
-        const uint32_t dst_addr = (dst_tmem16 ^ 1u) << 1;
+    for (uint32_t group = 0; group < group_count; group++) {
+        const uint32_t dxt_row = (group * dxt) >> 11;
+        const uint32_t dst_word64 = group + dxt_row * stride64;
+        last_row = dxt_row;
 
-        if (!sr_memory_read_be16(memory, src_addr, &texel)) {
-            return SR_ERROR_INVALID_ARGUMENT;
-        }
+        for (uint32_t lane = 0; lane < 4u; lane++) {
+            const uint32_t x = (group << 2) + lane;
+            if (x >= texel_count) break;
 
-        if (!tmem_write_be16(tmem, dst_addr, texel)) {
-            return SR_ERROR_INVALID_ARGUMENT;
+            uint16_t texel;
+            const uint32_t src_pixel = tl * state->texture_image.width + sl + x;
+            const uint32_t src_addr = state->texture_image.address + src_pixel * 2u;
+            const uint32_t dst_lane = lane ^ ((dxt_row & 1u) << 1);
+            const uint32_t dst_tmem16 = (tmem16_base + (dst_word64 << 2) + dst_lane) & 0x7ffu;
+            const uint32_t dst_addr = (dst_tmem16 ^ 1u) << 1;
+
+            if (!sr_memory_read_be16(memory, src_addr, &texel) ||
+                !tmem_write_be16(tmem, dst_addr, texel)) {
+                return SR_ERROR_INVALID_ARGUMENT;
+            }
         }
     }
 
-    record_loaded_tile(tmem, tile_index, texel_count, 1u, tile->line, 0u, 0u, texel_count - 1u, 0u);
+    record_loaded_tile(tmem, tile_index, texel_count, last_row + 1u, tile->line,
+                       0u, 0u, texel_count - 1u, last_row);
     return SR_OK;
 }
 

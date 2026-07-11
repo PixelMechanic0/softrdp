@@ -182,7 +182,11 @@ static void decode_load(rdp_load_cmd *load, const rdp_command *cmd)
     load->sl = (uint16_t)((cmd->words[0] >> 12) & 0xfffu);
     load->tl = (uint16_t)(cmd->words[0] & 0xfffu);
     load->sh = (uint16_t)((cmd->words[1] >> 12) & 0xfffu);
-    load->th = (uint16_t)(cmd->words[1] & 0xfffu);
+    if (cmd->id == RDP_CMD_LOAD_BLOCK) {
+        load->dxt = (uint16_t)(cmd->words[1] & 0xfffu);
+    } else {
+        load->th = (uint16_t)(cmd->words[1] & 0xfffu);
+    }
 }
 
 sr_result rdp_decode_command(rdp_command *cmd)
@@ -304,8 +308,16 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
     case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, metrics, cmd);
 
+    case RDP_CMD_LOAD_BLOCK: {
+        rdp_tile *tile = &state->tiles[cmd->decoded.load.tile_index];
+        tile->sl = cmd->decoded.load.sl;
+        tile->tl = cmd->decoded.load.tl;
+        tile->sh = cmd->decoded.load.sh;
+        tile->th = cmd->decoded.load.dxt;
+        return tmem_load_tile(tmem, memory, state, metrics, cmd);
+    }
+
     case RDP_CMD_LOAD_TLUT:
-    case RDP_CMD_LOAD_BLOCK:
     case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, metrics, cmd);
 
     case RDP_CMD_SET_COMBINE:                    state->combiner = cmd->decoded.set_combine; return SR_OK;

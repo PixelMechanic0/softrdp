@@ -135,7 +135,11 @@ typedef struct rdp_rect_cmd {
 
 typedef struct rdp_load_cmd {
     uint8_t tile_index;
-    uint16_t sl, tl, sh, th;
+    uint16_t sl, tl, sh;
+    union {
+        uint16_t th;
+        uint16_t dxt;
+    };
 } rdp_load_cmd;
 
 typedef struct rdp_command {
