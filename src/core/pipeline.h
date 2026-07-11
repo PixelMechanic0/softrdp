@@ -3,13 +3,9 @@
 
 #include "rdp_commands.h"
 #include "rdp_metrics.h"
+#include "combiner.h"
 
-typedef struct pipeline_inputs {
-    rdp_color shade;
-    rdp_color texel0;
-    rdp_color texel1;
-    rdp_color primitive;
-} pipeline_inputs;
+typedef rdp_combiner_inputs pipeline_inputs;
 
 typedef struct pipeline_outputs {
     rdp_color color;

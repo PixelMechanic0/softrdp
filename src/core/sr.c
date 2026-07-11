@@ -1,6 +1,7 @@
 #include "sr.h"
 
 #include "rdp_commands.h"
+#include "combiner.h"
 #include "rdp_memory.h"
 #include "rdp_metrics.h"
 #include "rdp_state.h"
@@ -91,9 +92,9 @@ static void rdp_state_init(rdp_state *state)
     state->scissor_x1 = 640u << 2;
     state->scissor_y1 = 480u << 2;
     state->other_modes.cycle_type = RDP_CYCLE_1;
-    state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
-    state->combiner_needs_texel0 = true;
-    state->combiner_needs_shade = false;
+    rdp_combiner_make_passthrough(&state->combiner,
+                                  RDP_COMBINER_TEXEL0_RGB,
+                                  RDP_COMBINER_TEXEL0_ALPHA);
 }
 
 static void capture_texture_debug(sr_debug_stats *debug, const rdp_state *state, const rdp_command *cmd)

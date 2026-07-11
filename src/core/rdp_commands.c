@@ -2,6 +2,7 @@
 
 #include "raster.h"
 #include "tmem.h"
+#include "combiner.h"
 
 static rdp_color color_from_word(uint32_t word)
 {
@@ -147,14 +148,7 @@ static void decode_set_tile_size(rdp_set_tile_size_cmd *tile, uint32_t w0, uint3
 
 static void decode_set_combine(rdp_set_combine_cmd *combine, uint32_t w0, uint32_t w1)
 {
-    combine->rgb_muladd0 = (w0 >> 20) & 0xfu;
-    combine->rgb_mul0 = (w0 >> 15) & 0x1fu;
-    combine->rgb_mulsub0 = (w1 >> 28) & 0xfu;
-    combine->rgb_add0 = (w1 >> 15) & 0x7u;
-    combine->alpha_muladd0 = (w0 >> 12) & 0x7u;
-    combine->alpha_mulsub0 = (w1 >> 12) & 0x7u;
-    combine->alpha_mul0 = (w0 >> 9) & 0x7u;
-    combine->alpha_add0 = (w1 >> 9) & 0x7u;
+    rdp_combiner_decode(combine, w0, w1);
 }
 
 static void decode_rect(rdp_rect_cmd *rect, const rdp_command *cmd)
@@ -305,21 +299,7 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_LOAD_BLOCK:
     case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, metrics, cmd);
 
-    case RDP_CMD_SET_COMBINE: {
-        const rdp_set_combine_cmd *d = &cmd->decoded.set_combine;
-        state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0;
-        if (d->rgb_muladd0 == 3u && d->rgb_mulsub0 == 8u && d->rgb_mul0 == 16u && d->rgb_add0 == 7u &&
-            d->alpha_muladd0 == 3u && d->alpha_mulsub0 == 7u && d->alpha_mul0 == 7u && d->alpha_add0 == 7u) {
-            state->simple_combiner = RDP_SIMPLE_COMBINER_PRIMITIVE;
-        } else if (d->rgb_muladd0 == 1u && d->rgb_mulsub0 == 8u && d->rgb_mul0 == 4u && d->rgb_add0 == 7u &&
-                   d->alpha_muladd0 == 1u && d->alpha_mulsub0 == 7u && d->alpha_mul0 == 4u && d->alpha_add0 == 7u) {
-            state->simple_combiner = RDP_SIMPLE_COMBINER_TEXEL0_SHADE;
-        }
-        state->combiner_needs_texel0 = (state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0 ||
-                                        state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE);
-        state->combiner_needs_shade = (state->simple_combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE);
-        return SR_OK;
-    }
+    case RDP_CMD_SET_COMBINE:                    state->combiner = cmd->decoded.set_combine; return SR_OK;
 
     case RDP_CMD_SET_CONVERT:
     case RDP_CMD_SET_KEY_GB:

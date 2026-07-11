@@ -124,10 +124,7 @@ typedef struct rdp_set_prim_depth_cmd {
     uint16_t depth, delta_z;
 } rdp_set_prim_depth_cmd;
 
-typedef struct rdp_set_combine_cmd {
-    uint32_t rgb_muladd0, rgb_mul0, rgb_mulsub0, rgb_add0;
-    uint32_t alpha_muladd0, alpha_mulsub0, alpha_mul0, alpha_add0;
-} rdp_set_combine_cmd;
+typedef rdp_combiner_program rdp_set_combine_cmd;
 
 typedef struct rdp_rect_cmd {
     uint32_t x0, y0, x1, y1;

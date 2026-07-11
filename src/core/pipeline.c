@@ -4,28 +4,12 @@
 #include "rdp_memory.h"
 #include "tmem.h"
 
-static uint8_t multiply_u8(uint8_t a, uint8_t b)
-{
-    return (uint8_t)(((uint32_t)a * (uint32_t)b + 127u) / 255u);
-}
-
-static rdp_color modulate_color(rdp_color texel, rdp_color shade)
-{
-    return (rdp_color){
-        multiply_u8(texel.r, shade.r),
-        multiply_u8(texel.g, shade.g),
-        multiply_u8(texel.b, shade.b),
-        multiply_u8(texel.a, shade.a)
-    };
-}
-
 pipeline_outputs pipeline_shade_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs)
 {
     pipeline_outputs out = { .coverage = 7 };
-    if (!inputs) out.color = (rdp_color){0, 0, 0, 255};
-    else if (state && state->combiner == RDP_SIMPLE_COMBINER_PRIMITIVE) out.color = inputs->primitive;
-    else if (state && state->combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE) out.color = modulate_color(inputs->texel0, inputs->shade);
-    else out.color = inputs->texel0;
+    out.color = (!state || !inputs)
+        ? (rdp_color){0, 0, 0, 255}
+        : rdp_combiner_evaluate(&state->program, state->cycle_type, inputs);
     return out;
 }
 
@@ -45,6 +29,18 @@ static inline rdp_color shade_base_color(const raster_shade_setup *shade)
         shade_component_to_u8(shade->b),
         shade_component_to_u8(shade->a)
     };
+}
+
+static inline rdp_color combine_shade_pixel(const rdp_primitive_state *primitive,
+                                            const raster_shade_setup *shade)
+{
+    const pipeline_inputs inputs = {
+        .shade = shade_base_color(shade),
+        .primitive = primitive->color.primitive_color,
+        .environment = primitive->color.environment_color,
+        .primitive_lod_fraction = primitive->color.primitive_lod_fraction
+    };
+    return pipeline_shade_pixel(&primitive->color, &inputs).color;
 }
 
 static int32_t perspective_divide_coord(int32_t coord, int32_t w)
@@ -155,7 +151,7 @@ static void record_texture_sample_attempt(rdp_metrics *metrics,
     if (texture->perspective) {
         metrics->texture_sample_perspective_attempts++;
     }
-    if (color->combiner == RDP_SIMPLE_COMBINER_TEXEL0_SHADE) {
+    if (color->needs_texel0 && color->needs_shade) {
         metrics->texture_sample_texel0_shade_attempts++;
     }
 }
@@ -250,7 +246,7 @@ sr_result pipeline_render_shade_triangle_span(sr_memory *memory,
                                                    &primitive->framebuffer,
                                                    (uint32_t)x,
                                                    (uint32_t)cursor.y,
-                                                   shade_base_color(&cursor.shade));
+                                                   combine_shade_pixel(primitive, &cursor.shade));
         if (result != SR_OK) {
             return result;
         }
@@ -275,7 +271,7 @@ sr_result pipeline_render_shade_depth_triangle_span(sr_memory *memory,
                                              &primitive->framebuffer,
                                              (uint32_t)x,
                                              (uint32_t)cursor.y,
-                                             shade_base_color(&cursor.shade));
+                                             combine_shade_pixel(primitive, &cursor.shade));
             if (result != SR_OK) {
                 return result;
             }
@@ -338,16 +334,15 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     if (tmem_sample_color_fixed5(tmem, texture, s_fixed, t_fixed, &texel0)) {
                         record_texture_sample_hit(metrics, &texture->tile);
                         record_texture_sample_color(metrics, texel0);
-                        rdp_color color;
-                        if (decoded->has_shade && color_pipeline->needs_shade) {
-                            const rdp_color shade = shade_base_color(&cursor.shade);
-                            color = modulate_color(texel0, shade);
-                        } else {
-                            color = pipeline_shade_pixel(color_pipeline, &(pipeline_inputs){
-                                .texel0 = texel0,
-                                .primitive = color_pipeline->primitive_color
-                            }).color;
-                        }
+                        const pipeline_inputs inputs = {
+                            .shade = decoded->has_shade ? shade_base_color(&cursor.shade) : (rdp_color){0, 0, 0, 0},
+                            .texel0 = texel0,
+                            .texel1 = texel0,
+                            .primitive = color_pipeline->primitive_color,
+                            .environment = color_pipeline->environment_color,
+                            .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
+                        };
+                        const rdp_color color = pipeline_shade_pixel(color_pipeline, &inputs).color;
                         sr_result result = framebuffer_write_color(memory, framebuffer, (uint32_t)x, (uint32_t)cursor.y, color);
                         if (result != SR_OK) {
                             return result;
@@ -359,8 +354,14 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                         }
                     }
                 } else {
+                    const pipeline_inputs inputs = {
+                        .shade = decoded->has_shade ? shade_base_color(&cursor.shade) : (rdp_color){0, 0, 0, 0},
+                        .primitive = color_pipeline->primitive_color,
+                        .environment = color_pipeline->environment_color,
+                        .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
+                    };
                     sr_result result = framebuffer_write_color(memory, framebuffer, (uint32_t)x, (uint32_t)cursor.y,
-                                                               color_pipeline->primitive_color);
+                                                               pipeline_shade_pixel(color_pipeline, &inputs).color);
                     if (result != SR_OK) {
                         return result;
                     }
@@ -418,8 +419,14 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
                                         uint32_t x,
                                         uint32_t y)
 {
-    if (color_pipeline->combiner == RDP_SIMPLE_COMBINER_PRIMITIVE) {
-        return framebuffer_write_color(memory, framebuffer, x, y, color_pipeline->primitive_color);
+    if (!color_pipeline->needs_texel0 && !color_pipeline->needs_texel1) {
+        const pipeline_inputs inputs = {
+            .primitive = color_pipeline->primitive_color,
+            .environment = color_pipeline->environment_color,
+            .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
+        };
+        return framebuffer_write_color(memory, framebuffer, x, y,
+                                       pipeline_shade_pixel(color_pipeline, &inputs).color);
     }
 
     rdp_color texel0;
@@ -438,7 +445,10 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
 
     pipeline_inputs inputs = {
         .texel0 = texel0,
-        .primitive = color_pipeline->primitive_color
+        .texel1 = texel0,
+        .primitive = color_pipeline->primitive_color,
+        .environment = color_pipeline->environment_color,
+        .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
     };
     pipeline_outputs outputs = pipeline_shade_pixel(color_pipeline, &inputs);
     return framebuffer_write_color(memory, framebuffer, x, y, outputs.color);

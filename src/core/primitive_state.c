@@ -59,10 +59,14 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->depth.image_address = registers->depth_image_address;
     primitive->depth.compare = registers->other_modes.z_compare;
     primitive->depth.update = registers->other_modes.z_update;
-    primitive->color.combiner = registers->simple_combiner;
+    primitive->color.program = registers->combiner;
     primitive->color.primitive_color = registers->primitive_color;
-    primitive->color.needs_texel0 = registers->combiner_needs_texel0;
-    primitive->color.needs_shade = registers->combiner_needs_shade;
+    primitive->color.environment_color = registers->environment_color;
+    primitive->color.cycle_type = registers->other_modes.cycle_type;
+    primitive->color.primitive_lod_fraction = registers->primitive_lod_fraction;
+    primitive->color.needs_texel0 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL0) != 0;
+    primitive->color.needs_texel1 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL1) != 0;
+    primitive->color.needs_shade = (registers->combiner.input_mask & RDP_COMBINER_INPUT_SHADE) != 0;
     primitive->tmem = tmem;
     primitive->metrics = metrics;
     pipeline_resolve_tile_bounds(registers,

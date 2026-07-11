@@ -84,11 +84,45 @@ typedef struct rdp_other_modes {
     uint8_t alpha_dither;
 } rdp_other_modes;
 
-typedef enum rdp_simple_combiner {
-    RDP_SIMPLE_COMBINER_TEXEL0 = 0,
-    RDP_SIMPLE_COMBINER_PRIMITIVE = 1,
-    RDP_SIMPLE_COMBINER_TEXEL0_SHADE = 2
-} rdp_simple_combiner;
+typedef enum rdp_combiner_source {
+    RDP_COMBINER_ZERO = 0,
+    RDP_COMBINER_ONE,
+    RDP_COMBINER_COMBINED_RGB,
+    RDP_COMBINER_COMBINED_ALPHA,
+    RDP_COMBINER_TEXEL0_RGB,
+    RDP_COMBINER_TEXEL0_ALPHA,
+    RDP_COMBINER_TEXEL1_RGB,
+    RDP_COMBINER_TEXEL1_ALPHA,
+    RDP_COMBINER_PRIMITIVE_RGB,
+    RDP_COMBINER_PRIMITIVE_ALPHA,
+    RDP_COMBINER_SHADE_RGB,
+    RDP_COMBINER_SHADE_ALPHA,
+    RDP_COMBINER_ENVIRONMENT_RGB,
+    RDP_COMBINER_ENVIRONMENT_ALPHA,
+    RDP_COMBINER_LOD_FRACTION,
+    RDP_COMBINER_PRIMITIVE_LOD_FRACTION,
+    RDP_COMBINER_NOISE,
+    RDP_COMBINER_KEY_CENTER,
+    RDP_COMBINER_KEY_SCALE,
+    RDP_COMBINER_K4,
+    RDP_COMBINER_K5
+} rdp_combiner_source;
+
+typedef struct rdp_combiner_cycle {
+    uint8_t rgb_a, rgb_b, rgb_c, rgb_d;
+    uint8_t alpha_a, alpha_b, alpha_c, alpha_d;
+} rdp_combiner_cycle;
+
+enum {
+    RDP_COMBINER_INPUT_TEXEL0 = 1u << 0,
+    RDP_COMBINER_INPUT_TEXEL1 = 1u << 1,
+    RDP_COMBINER_INPUT_SHADE = 1u << 2
+};
+
+typedef struct rdp_combiner_program {
+    rdp_combiner_cycle cycle[2];
+    uint8_t input_mask;
+} rdp_combiner_program;
 
 typedef struct rdp_tile_bounds {
     uint32_t sl;
@@ -115,9 +149,7 @@ typedef struct rdp_state {
     uint16_t scissor_x1;
     uint16_t scissor_y1;
     rdp_other_modes other_modes;
-    rdp_simple_combiner simple_combiner;
-    bool combiner_needs_texel0;
-    bool combiner_needs_shade;
+    rdp_combiner_program combiner;
     rdp_tile tiles[8];
 } rdp_state;
 
@@ -145,9 +177,13 @@ typedef struct rdp_depth_state {
 } rdp_depth_state;
 
 typedef struct rdp_color_pipeline_state {
-    rdp_simple_combiner combiner;
+    rdp_combiner_program program;
     rdp_color primitive_color;
+    rdp_color environment_color;
+    rdp_cycle_type cycle_type;
+    uint8_t primitive_lod_fraction;
     bool needs_texel0;
+    bool needs_texel1;
     bool needs_shade;
 } rdp_color_pipeline_state;
 
