@@ -188,6 +188,12 @@ static inline bool tmem_tile_sample_layout(const tmem_state *tmem,
 
     const uint32_t tile_index = sample->tile_index;
     const rdp_tile *tile = &sample->tile;
+    if (sample->width != 0 && sample->height != 0 && sample->stride != 0) {
+        *width = sample->width;
+        *height = sample->height;
+        *stride = sample->stride;
+        return true;
+    }
     if (tmem_tile_extent_from_descriptor(tile, width, height)) {
         *stride = tile->line;
         if (*stride == 0) {

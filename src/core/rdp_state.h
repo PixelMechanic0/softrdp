@@ -176,6 +176,9 @@ typedef struct rdp_framebuffer_state {
 typedef struct rdp_texture_sample_state {
     rdp_tile tile;
     rdp_tile_bounds bounds;
+    uint16_t width;
+    uint16_t height;
+    uint16_t stride;
     uint8_t tile_index;
     bool perspective;
     bool tlut_enable;

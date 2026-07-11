@@ -87,6 +87,18 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
                                  tmem,
                                  primitive->texture.tile_index,
                                  &primitive->texture.bounds);
+    uint32_t texture_width;
+    uint32_t texture_height;
+    uint32_t texture_stride;
+    if (tmem_tile_sample_layout(tmem,
+                                &primitive->texture,
+                                &texture_width,
+                                &texture_height,
+                                &texture_stride)) {
+        primitive->texture.width = (uint16_t)texture_width;
+        primitive->texture.height = (uint16_t)texture_height;
+        primitive->texture.stride = (uint16_t)texture_stride;
+    }
 }
 
 void pipeline_compile_triangle(rdp_primitive_state *primitive,
