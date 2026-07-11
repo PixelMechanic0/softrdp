@@ -10,13 +10,6 @@
 typedef struct rdp_metrics {
     uint64_t commands_seen;
     uint64_t draw_calls_seen;
-    uint64_t command_counts[64];
-    uint64_t depth_tests;
-    uint64_t depth_passes;
-    uint64_t depth_rejects;
-    uint64_t depth_updates_planned;
-    uint64_t depth_updates_committed;
-    uint64_t depth_updates_discarded;
 
     uint64_t triangle_count;
     uint64_t triangle_ticks;

@@ -58,7 +58,6 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->texture.mid_texel = registers->other_modes.mid_texel;
     primitive->fragment.depth.image_address = registers->depth_image_address;
     primitive->fragment.depth.primitive_depth = registers->primitive_depth;
-    primitive->fragment.depth.primitive_delta_z = registers->primitive_delta_z;
     primitive->fragment.depth.compare = registers->other_modes.z_compare;
     primitive->fragment.depth.update = registers->other_modes.z_update;
     primitive->fragment.depth.source_primitive = registers->other_modes.z_source_primitive;
@@ -79,11 +78,8 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.blend.alpha_compare = registers->other_modes.alpha_compare;
     primitive->fragment.alpha_cvg_select = registers->other_modes.alpha_cvg_select;
     primitive->fragment.cvg_times_alpha = registers->other_modes.cvg_times_alpha;
-    primitive->fragment.color_on_cvg = registers->other_modes.color_on_cvg;
     primitive->fragment.antialias = registers->other_modes.antialias;
-    primitive->fragment.alpha_compare_dither = registers->other_modes.alpha_compare_dither;
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
-    primitive->fragment.z_mode = registers->other_modes.z_mode;
     primitive->tmem = tmem;
     primitive->metrics = metrics;
     pipeline_resolve_tile_bounds(registers,

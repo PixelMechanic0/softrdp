@@ -187,7 +187,6 @@ typedef struct rdp_texture_sample_state {
 typedef struct rdp_depth_state {
     uint32_t image_address;
     uint16_t primitive_depth;
-    uint16_t primitive_delta_z;
     bool compare;
     bool update;
     bool source_primitive;
@@ -219,11 +218,8 @@ typedef struct rdp_fragment_state {
     rdp_depth_state depth;
     bool alpha_cvg_select;
     bool cvg_times_alpha;
-    bool color_on_cvg;
     bool antialias;
-    bool alpha_compare_dither;
     uint8_t coverage_dest;
-    uint8_t z_mode;
 } rdp_fragment_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)

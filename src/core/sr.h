@@ -9,13 +9,6 @@ typedef struct sr_context sr_context;
 typedef struct sr_debug_stats {
     uint64_t commands_seen;
     uint64_t draw_calls_seen;
-    uint64_t command_counts[64];
-    uint64_t depth_tests;
-    uint64_t depth_passes;
-    uint64_t depth_rejects;
-    uint64_t depth_updates_planned;
-    uint64_t depth_updates_committed;
-    uint64_t depth_updates_discarded;
     uint32_t last_list_current;
     uint32_t last_list_end;
     uint32_t last_list_bytes;

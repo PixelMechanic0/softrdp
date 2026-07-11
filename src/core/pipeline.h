@@ -62,7 +62,7 @@ struct rdp_primitive_state {
     bool fill_mode;
 };
 
-pipeline_outputs pipeline_shade_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs);
+pipeline_outputs pipeline_combine_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs);
 
 void pipeline_compile_framebuffer(rdp_framebuffer_state *framebuffer,
                                   const rdp_state *registers);
