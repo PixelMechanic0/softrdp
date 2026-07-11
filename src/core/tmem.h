@@ -505,9 +505,16 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
     }
 
     if (tile->format == RDP_FORMAT_I) {
+        if (tile->size == RDP_SIZE_4BPP && address.bytes == 1) {
+            const uint8_t packed = tmem->bytes[address.byte];
+            const uint8_t nibble = address.subtexel ? (packed & 0xfu) : (packed >> 4);
+            const uint8_t intensity = expand_4_to_8(nibble);
+            *color = (rdp_color){ intensity, intensity, intensity, intensity };
+            return true;
+        }
         if (tile->size == RDP_SIZE_8BPP && address.bytes == 1) {
             const uint8_t intensity = tmem->bytes[address.byte];
-            *color = (rdp_color){ intensity, intensity, intensity, 255u };
+            *color = (rdp_color){ intensity, intensity, intensity, intensity };
             return true;
         }
         return false;

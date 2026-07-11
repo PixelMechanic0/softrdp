@@ -49,12 +49,13 @@ static int32_t triangle_coord_fixed5(int32_t interpolated)
 
 static int32_t perspective_divide_coord(int32_t coord, int32_t w)
 {
-    const int32_t coord_fixed5 = triangle_coord_fixed5(coord);
-    const int32_t w_fixed15 = (int16_t)((uint32_t)w >> 16);
-    if (w_fixed15 <= 0) {
+    /* S/T and W are interpolated with 16 fractional low bits. Dividing their
+     * truncated high halves quantizes slowly varying coordinates before the
+     * perspective correction and turns textures into large texel blocks. */
+    if (w <= 0) {
         return 0x7fffu;
     }
-    const int64_t divided = ((int64_t)coord_fixed5 * 32768ll) / w_fixed15;
+    const int64_t divided = ((int64_t)coord * 32768ll) / (int64_t)w;
     return divided < -0x10000ll ? -0x10000 : (divided > 0xffffll ? 0xffff : (int32_t)divided);
 }
 
@@ -510,7 +511,10 @@ static sr_result render_rectangle_pixel(sr_memory *memory,
         if (metrics) {
             metrics->rect_texture_sample_misses++;
         }
-        return SR_ERROR_INVALID_ARGUMENT;
+        /* A texture lookup miss is a rejected fragment, not a malformed RDP
+         * command.  Aborting here used to discard the rest of the display
+         * list when a rectangle touched an unsupported/empty TMEM texel. */
+        return SR_OK;
     }
     if (metrics) {
         metrics->rect_texture_sample_hits++;
@@ -564,8 +568,11 @@ sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,
     for (int x = work->x_begin; x <= work->x_end; x++) {
         rdp_color texel;
         if (!tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
-                                      s_fixed, t_fixed, &texel))
-            return SR_ERROR_INVALID_ARGUMENT;
+                                      s_fixed, t_fixed, &texel)) {
+            s_fixed += work->dsdx_fixed;
+            t_fixed += work->dtdx_fixed;
+            continue;
+        }
 
         bool passes_alpha = true;
         if (primitive->fragment.blend.alpha_compare) {
