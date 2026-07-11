@@ -56,9 +56,9 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->texture.bilerp = registers->other_modes.bilerp0;
     primitive->texture.sample_quad = registers->other_modes.sample_quad;
     primitive->texture.mid_texel = registers->other_modes.mid_texel;
-    primitive->depth.image_address = registers->depth_image_address;
-    primitive->depth.compare = registers->other_modes.z_compare;
-    primitive->depth.update = registers->other_modes.z_update;
+    primitive->fragment.depth.image_address = registers->depth_image_address;
+    primitive->fragment.depth.compare = registers->other_modes.z_compare;
+    primitive->fragment.depth.update = registers->other_modes.z_update;
     primitive->color.program = registers->combiner;
     primitive->color.primitive_color = registers->primitive_color;
     primitive->color.environment_color = registers->environment_color;
@@ -67,6 +67,20 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.needs_texel0 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL0) != 0;
     primitive->color.needs_texel1 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL1) != 0;
     primitive->color.needs_shade = (registers->combiner.input_mask & RDP_COMBINER_INPUT_SHADE) != 0;
+    primitive->fragment.blend.program = registers->blender;
+    primitive->fragment.blend.fog_color = registers->fog_color;
+    primitive->fragment.blend.blend_color = registers->blend_color;
+    primitive->fragment.blend.cycle_type = registers->other_modes.cycle_type;
+    primitive->fragment.blend.force_blend = registers->other_modes.force_blend;
+    primitive->fragment.blend.image_read = registers->other_modes.image_read;
+    primitive->fragment.blend.alpha_compare = registers->other_modes.alpha_compare;
+    primitive->fragment.alpha_cvg_select = registers->other_modes.alpha_cvg_select;
+    primitive->fragment.cvg_times_alpha = registers->other_modes.cvg_times_alpha;
+    primitive->fragment.color_on_cvg = registers->other_modes.color_on_cvg;
+    primitive->fragment.antialias = registers->other_modes.antialias;
+    primitive->fragment.alpha_compare_dither = registers->other_modes.alpha_compare_dither;
+    primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
+    primitive->fragment.z_mode = registers->other_modes.z_mode;
     primitive->tmem = tmem;
     primitive->metrics = metrics;
     pipeline_resolve_tile_bounds(registers,

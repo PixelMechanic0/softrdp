@@ -44,8 +44,8 @@ typedef struct rdp_primitive_state rdp_primitive_state;
 struct rdp_primitive_state {
     rdp_framebuffer_state framebuffer;
     rdp_texture_sample_state texture;
-    rdp_depth_state depth;
     rdp_color_pipeline_state color;
+    rdp_fragment_state fragment;
     const tmem_state *tmem;
     rdp_metrics *metrics;
     raster_decoded_triangle triangle;

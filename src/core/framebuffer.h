@@ -3,6 +3,11 @@
 
 #include "rdp_memory.h"
 #include "rdp_state.h"
+
+typedef struct rdp_memory_pixel {
+    rdp_color color;
+    uint8_t coverage;
+} rdp_memory_pixel;
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -46,6 +51,44 @@ static inline sr_result framebuffer_write_color(sr_memory *memory, const rdp_fra
     case RDP_SIZE_32BPP: return sr_memory_write_be32(memory, state->color_image.address + pixel * 4u, pipeline_color_to_rgba8888(color)) ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
     default:             return SR_ERROR_UNSUPPORTED;
     }
+}
+
+static inline sr_result framebuffer_read_color(sr_memory *memory, const rdp_framebuffer_state *state,
+                                                uint32_t x, uint32_t y, rdp_color *color)
+{
+    if (!memory || !state || !color || x >= state->color_image.width) return SR_ERROR_INVALID_ARGUMENT;
+    const uint32_t pixel = y * state->color_image.width + x;
+    if (state->color_image.size == RDP_SIZE_16BPP) {
+        uint16_t value;
+        if (!sr_memory_read_be16(memory, state->color_image.address + pixel * 2u, &value)) return SR_ERROR_INVALID_ARGUMENT;
+        *color = pipeline_rgba5551_to_color(value);
+        color->a &= 0xe0u;
+        return SR_OK;
+    }
+    if (state->color_image.size == RDP_SIZE_32BPP) {
+        uint32_t value;
+        if (!sr_memory_read_be32(memory, state->color_image.address + pixel * 4u, &value)) return SR_ERROR_INVALID_ARGUMENT;
+        *color = (rdp_color){ (uint8_t)(value >> 24), (uint8_t)(value >> 16),
+                              (uint8_t)(value >> 8), (uint8_t)value & 0xe0u };
+        return SR_OK;
+    }
+    return SR_ERROR_UNSUPPORTED;
+}
+
+static inline sr_result framebuffer_read_memory_pixel(sr_memory *memory,
+                                                       const rdp_framebuffer_state *state,
+                                                       uint32_t x, uint32_t y,
+                                                       bool image_read,
+                                                       rdp_memory_pixel *pixel)
+{
+    if (!pixel) return SR_ERROR_INVALID_ARGUMENT;
+    pixel->color = (rdp_color){0, 0, 0, 0xe0u};
+    pixel->coverage = 7u;
+    if (!image_read) return SR_OK;
+    const sr_result result = framebuffer_read_color(memory, state, x, y, &pixel->color);
+    if (result != SR_OK) return result;
+    pixel->coverage = (pixel->color.a >> 5) & 7u;
+    return SR_OK;
 }
 
 static inline sr_result framebuffer_write_fill_pixel(sr_memory *memory, const rdp_framebuffer_state *state, uint32_t x, uint32_t y)

@@ -3,6 +3,7 @@
 #include "raster.h"
 #include "tmem.h"
 #include "combiner.h"
+#include "blender.h"
 
 static rdp_color color_from_word(uint32_t word)
 {
@@ -110,11 +111,15 @@ static void decode_set_other_modes(rdp_other_modes *modes, uint32_t w0, uint32_t
     modes->rgb_dither = (uint8_t)((w0 >> 6) & 3u);
     modes->alpha_dither = (uint8_t)((w0 >> 4) & 3u);
     modes->force_blend = (w1 & (1u << 14)) != 0;
+    modes->alpha_cvg_select = (w1 & (1u << 13)) != 0;
+    modes->cvg_times_alpha = (w1 & (1u << 12)) != 0;
+    modes->color_on_cvg = (w1 & (1u << 7)) != 0;
     modes->image_read = (w1 & (1u << 6)) != 0;
     modes->z_update = (w1 & (1u << 5)) != 0;
     modes->z_compare = (w1 & (1u << 4)) != 0;
     modes->antialias = (w1 & (1u << 3)) != 0;
     modes->alpha_compare = (w1 & 1u) != 0;
+    modes->alpha_compare_dither = (w1 & (1u << 1)) != 0;
     modes->coverage_dest = (uint8_t)((w1 >> 8) & 3u);
     modes->z_mode = (uint8_t)((w1 >> 10) & 3u);
 }
@@ -256,7 +261,10 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_SET_TEXTURE_IMAGE:               state->texture_image = cmd->decoded.set_texture_image; return SR_OK;
     case RDP_CMD_SET_MASK_IMAGE:                  state->depth_image_address = cmd->decoded.set_mask_image.address; return SR_OK;
     case RDP_CMD_SET_SCISSOR:                     state->scissor_x0 = cmd->decoded.set_scissor.x0; state->scissor_y0 = cmd->decoded.set_scissor.y0; state->scissor_x1 = cmd->decoded.set_scissor.x1; state->scissor_y1 = cmd->decoded.set_scissor.y1; return SR_OK;
-    case RDP_CMD_SET_OTHER_MODES:                 state->other_modes = cmd->decoded.set_other_modes; return SR_OK;
+    case RDP_CMD_SET_OTHER_MODES:
+        state->other_modes = cmd->decoded.set_other_modes;
+        rdp_blender_decode(&state->blender, cmd->words[1]);
+        return SR_OK;
 
     case RDP_CMD_SET_TILE: {
         const rdp_set_tile_cmd *d = &cmd->decoded.set_tile;

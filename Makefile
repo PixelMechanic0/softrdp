@@ -24,6 +24,7 @@ CORE_SRCS := \
 	src/core/rdp_memory.c \
 	src/core/framebuffer.c \
 	src/core/combiner.c \
+	src/core/blender.c \
 	src/core/raster.c \
 	src/core/tmem.c \
 	src/core/primitive_state.c \

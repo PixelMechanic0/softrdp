@@ -73,11 +73,15 @@ typedef struct rdp_other_modes {
     bool bilerp1;
     bool convert_one;
     bool force_blend;
+    bool alpha_cvg_select;
+    bool cvg_times_alpha;
+    bool color_on_cvg;
     bool image_read;
     bool z_update;
     bool z_compare;
     bool antialias;
     bool alpha_compare;
+    bool alpha_compare_dither;
     uint8_t coverage_dest;
     uint8_t z_mode;
     uint8_t rgb_dither;
@@ -124,6 +128,14 @@ typedef struct rdp_combiner_program {
     uint8_t input_mask;
 } rdp_combiner_program;
 
+typedef struct rdp_blender_cycle {
+    uint8_t color_a, factor_a, color_b, factor_b;
+} rdp_blender_cycle;
+
+typedef struct rdp_blender_program {
+    rdp_blender_cycle cycle[2];
+} rdp_blender_program;
+
 typedef struct rdp_tile_bounds {
     uint32_t sl;
     uint32_t tl;
@@ -150,6 +162,7 @@ typedef struct rdp_state {
     uint16_t scissor_y1;
     rdp_other_modes other_modes;
     rdp_combiner_program combiner;
+    rdp_blender_program blender;
     rdp_tile tiles[8];
 } rdp_state;
 
@@ -186,6 +199,28 @@ typedef struct rdp_color_pipeline_state {
     bool needs_texel1;
     bool needs_shade;
 } rdp_color_pipeline_state;
+
+typedef struct rdp_blend_state {
+    rdp_blender_program program;
+    rdp_color fog_color;
+    rdp_color blend_color;
+    rdp_cycle_type cycle_type;
+    bool force_blend;
+    bool image_read;
+    bool alpha_compare;
+} rdp_blend_state;
+
+typedef struct rdp_fragment_state {
+    rdp_blend_state blend;
+    rdp_depth_state depth;
+    bool alpha_cvg_select;
+    bool cvg_times_alpha;
+    bool color_on_cvg;
+    bool antialias;
+    bool alpha_compare_dither;
+    uint8_t coverage_dest;
+    uint8_t z_mode;
+} rdp_fragment_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)
 {
