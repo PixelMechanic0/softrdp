@@ -12,6 +12,13 @@ typedef struct pipeline_outputs {
     uint8_t coverage;
 } pipeline_outputs;
 
+typedef struct rdp_fragment {
+    rdp_color color;
+    uint16_t alpha;
+    uint8_t coverage;
+    uint8_t shade_alpha;
+} rdp_fragment;
+
 /* Incremental values at the start of one scanline span. */
 typedef struct rdp_span_work {
     int x_begin;
@@ -33,7 +40,8 @@ typedef enum rdp_span_kernel_kind {
     RDP_SPAN_KERNEL_SHADE_TRIANGLE,
     RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE,
     RDP_SPAN_KERNEL_TEXTURE_TRIANGLE,
-    RDP_SPAN_KERNEL_TEXTURE_RECTANGLE
+    RDP_SPAN_KERNEL_TEXTURE_RECTANGLE,
+    RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
 } rdp_span_kernel_kind;
 
 typedef struct rdp_primitive_state rdp_primitive_state;
@@ -113,6 +121,10 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                                          const rdp_primitive_state *primitive,
                                          const rdp_span_work *work);
 
+sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,
+                                              const rdp_primitive_state *primitive,
+                                              const rdp_span_work *work);
+
 static inline sr_result pipeline_render_span(sr_memory *memory,
                                              const rdp_primitive_state *primitive,
                                              const rdp_span_work *work)
@@ -134,6 +146,8 @@ static inline sr_result pipeline_render_span(sr_memory *memory,
         return pipeline_render_triangle_span(memory, primitive, work);
     case RDP_SPAN_KERNEL_TEXTURE_RECTANGLE:
         return pipeline_render_rectangle_span(memory, primitive, work);
+    case RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY:
+        return pipeline_render_copy_rectangle_span(memory, primitive, work);
     default:
         return SR_ERROR_INVALID_ARGUMENT;
     }

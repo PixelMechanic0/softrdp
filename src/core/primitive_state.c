@@ -128,5 +128,7 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
     }
 
     pipeline_compile_common(primitive, registers, tmem, metrics, tile_index);
-    primitive->span_kernel = RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
+    primitive->span_kernel = registers->other_modes.cycle_type == RDP_CYCLE_COPY
+        ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
+        : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
 }

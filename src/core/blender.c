@@ -20,21 +20,21 @@ static rdp_color color_source(uint8_t code, const rdp_blend_state *s,
     }
 }
 
-static uint8_t factor_a(uint8_t code, const rdp_blend_state *s,
-                        rdp_color pixel, uint8_t shade_alpha)
+static uint16_t factor_a(uint8_t code, const rdp_blend_state *s,
+                         uint16_t pixel_alpha, uint8_t shade_alpha)
 {
     switch (code & 3u) {
-    case 0: return pixel.a;
+    case 0: return pixel_alpha;
     case 1: return s->fog_color.a;
     case 2: return shade_alpha;
     default:return 0u;
     }
 }
 
-static uint8_t factor_b(uint8_t code, uint8_t a, rdp_color memory)
+static uint16_t factor_b(uint8_t code, uint16_t a, rdp_color memory)
 {
     switch (code & 3u) {
-    case 0: return (uint8_t)~a;
+    case 0: return a >= 0x100u ? 0u : 0xffu - a;
     case 1: return memory.a;
     case 2: return 0xffu;
     default:return 0u;
@@ -43,14 +43,19 @@ static uint8_t factor_b(uint8_t code, uint8_t a, rdp_color memory)
 
 static rdp_color evaluate_cycle(const rdp_blend_state *s,
                                 const rdp_blender_cycle *c,
-                                rdp_color pixel, rdp_color memory,
+                                rdp_color pixel, uint16_t pixel_alpha,
+                                rdp_color memory,
                                 uint8_t shade_alpha,
                                 bool final_cycle)
 {
     const rdp_color x = color_source(c->color_a, s, pixel, memory);
     const rdp_color y = color_source(c->color_b, s, pixel, memory);
-    const uint32_t a = factor_a(c->factor_a, s, pixel, shade_alpha) >> 3;
-    const uint32_t b = (factor_b(c->factor_b, (uint8_t)(a << 3), memory) >> 3) + 1u;
+    if (final_cycle && c->factor_a == 0u && c->factor_b == 0u &&
+        pixel_alpha >= 0xffu)
+        return x;
+    const uint16_t raw_a = factor_a(c->factor_a, s, pixel_alpha, shade_alpha);
+    const uint32_t a = raw_a >> 3;
+    const uint32_t b = (factor_b(c->factor_b, raw_a, memory) >> 3) + 1u;
     const uint32_t divisor = (!final_cycle || s->force_blend) ? 32u : a + b;
     if (!divisor) return x;
     return (rdp_color){
@@ -62,7 +67,8 @@ static rdp_color evaluate_cycle(const rdp_blend_state *s,
 }
 
 rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
-                               rdp_color memory, uint8_t shade_alpha,
+                               uint16_t pixel_alpha, rdp_color memory,
+                               uint8_t shade_alpha,
                                bool blend_enable)
 {
     if (!s) return pixel;
@@ -71,8 +77,11 @@ rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
     if (!blend_enable)
         return color_source(final->color_a, s, pixel, memory);
     if (s->cycle_type == RDP_CYCLE_2) {
-        pixel = evaluate_cycle(s, &s->program.cycle[0], pixel, memory, shade_alpha, false);
-        return evaluate_cycle(s, &s->program.cycle[1], pixel, memory, shade_alpha, true);
+        pixel = evaluate_cycle(s, &s->program.cycle[0], pixel, pixel_alpha,
+                               memory, shade_alpha, false);
+        return evaluate_cycle(s, &s->program.cycle[1], pixel, pixel_alpha,
+                              memory, shade_alpha, true);
     }
-    return evaluate_cycle(s, &s->program.cycle[0], pixel, memory, shade_alpha, true);
+    return evaluate_cycle(s, &s->program.cycle[0], pixel, pixel_alpha,
+                          memory, shade_alpha, true);
 }

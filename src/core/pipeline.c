@@ -174,48 +174,53 @@ static sr_result pipeline_write_fragment(sr_memory *memory,
                                          bool *accepted)
 {
     if (accepted) *accepted = false;
-    const rdp_fragment_state *fragment = &primitive->fragment;
-    uint32_t coverage = 8u;
-    uint32_t modulated_alpha = pixel.a;
-    if (fragment->cvg_times_alpha) {
-        modulated_alpha = ((uint32_t)pixel.a * coverage + 4u) >> 3;
-        coverage = (modulated_alpha >> 5) & 0xfu;
+    const rdp_fragment_state *state = &primitive->fragment;
+    rdp_fragment fragment = {
+        .color = pixel,
+        .alpha = pixel.a,
+        .coverage = 8u,
+        .shade_alpha = shade_alpha
+    };
+    if (state->cvg_times_alpha) {
+        fragment.alpha = (uint16_t)(((uint32_t)fragment.alpha * fragment.coverage + 4u) >> 3);
+        fragment.coverage = (uint8_t)((fragment.alpha >> 5) & 0xfu);
     }
-    if (fragment->alpha_cvg_select)
-        pixel.a = fragment->cvg_times_alpha ? (uint8_t)modulated_alpha
-                                            : (uint8_t)(coverage << 5);
+    if (state->alpha_cvg_select && !state->cvg_times_alpha)
+        fragment.alpha = (uint16_t)fragment.coverage << 5;
 
-    uint8_t alpha_threshold = fragment->blend.blend_color.a;
-    if (fragment->alpha_compare_dither)
+    uint8_t alpha_threshold = state->blend.blend_color.a;
+    if (state->alpha_compare_dither)
         alpha_threshold = (uint8_t)((x * 17u + y * 131u + x * y * 3u) & 0xffu);
-    if (fragment->blend.alpha_compare && pixel.a < alpha_threshold)
+    if (state->blend.alpha_compare && fragment.alpha < alpha_threshold)
         return SR_OK;
 
     rdp_memory_pixel memory_pixel;
     const sr_result read = framebuffer_read_memory_pixel(memory, &primitive->framebuffer,
-                                                         x, y, fragment->blend.image_read,
+                                                         x, y, state->blend.image_read,
                                                          &memory_pixel);
     if (read != SR_OK) return read;
 
-    const bool coverage_overflow = ((coverage + memory_pixel.coverage) & 8u) != 0u;
-    const bool blend_enable = fragment->blend.force_blend ||
-                              (fragment->antialias && !coverage_overflow);
-    pixel = rdp_blender_evaluate(&fragment->blend, pixel, memory_pixel.color,
-                                 shade_alpha, blend_enable);
+    const bool coverage_overflow = ((fragment.coverage + memory_pixel.coverage) & 8u) != 0u;
+    const bool blend_enable = state->blend.force_blend ||
+                              (state->antialias && !coverage_overflow);
+    fragment.color = rdp_blender_evaluate(&state->blend, fragment.color,
+                                          fragment.alpha, memory_pixel.color,
+                                          fragment.shade_alpha, blend_enable);
 
     uint32_t final_coverage;
-    switch (fragment->coverage_dest & 3u) {
+    switch (state->coverage_dest & 3u) {
     case 0:
-        final_coverage = blend_enable ? coverage + memory_pixel.coverage
-                                      : coverage - 1u;
+        final_coverage = blend_enable ? fragment.coverage + memory_pixel.coverage
+                                      : fragment.coverage - 1u;
         if (final_coverage > 7u) final_coverage = 7u;
         break;
-    case 1: final_coverage = (coverage + memory_pixel.coverage) & 7u; break;
+    case 1: final_coverage = (fragment.coverage + memory_pixel.coverage) & 7u; break;
     case 2: final_coverage = 7u; break;
     default:final_coverage = memory_pixel.coverage; break;
     }
-    pixel.a = (uint8_t)((final_coverage << 5) | 0x1fu);
-    const sr_result result = framebuffer_write_color(memory, &primitive->framebuffer, x, y, pixel);
+    fragment.color.a = (uint8_t)((final_coverage << 5) | 0x1fu);
+    const sr_result result = framebuffer_write_color(memory, &primitive->framebuffer,
+                                                     x, y, fragment.color);
     if (result == SR_OK && accepted) *accepted = true;
     return result;
 }
@@ -631,5 +636,37 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
         t_fixed += work->dtdx_fixed;
     }
 
+    return SR_OK;
+}
+
+sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,
+                                               const rdp_primitive_state *primitive,
+                                               const rdp_span_work *work)
+{
+    if (!memory || !primitive || !work) return SR_ERROR_INVALID_ARGUMENT;
+    int32_t s_fixed = work->s_fixed;
+    int32_t t_fixed = work->t_fixed;
+    for (int x = work->x_begin; x <= work->x_end; x++) {
+        rdp_color texel;
+        if (!tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
+                                      s_fixed, t_fixed, &texel))
+            return SR_ERROR_INVALID_ARGUMENT;
+
+        bool passes_alpha = true;
+        if (primitive->fragment.blend.alpha_compare) {
+            if (primitive->framebuffer.color_image.size == RDP_SIZE_16BPP)
+                passes_alpha = texel.a != 0u;
+            else
+                passes_alpha = texel.a >= primitive->fragment.blend.blend_color.a;
+        }
+        if (passes_alpha) {
+            const sr_result result = framebuffer_write_color(memory, &primitive->framebuffer,
+                                                             (uint32_t)x, (uint32_t)work->y,
+                                                             texel);
+            if (result != SR_OK) return result;
+        }
+        s_fixed += work->dsdx_fixed;
+        t_fixed += work->dtdx_fixed;
+    }
     return SR_OK;
 }
