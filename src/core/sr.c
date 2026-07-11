@@ -319,6 +319,13 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
         stats = ctx->debug;
         stats.commands_seen = ctx->metrics.commands_seen;
         stats.draw_calls_seen = ctx->metrics.draw_calls_seen;
+        memcpy(stats.command_counts, ctx->metrics.command_counts, sizeof(stats.command_counts));
+        stats.depth_tests = ctx->metrics.depth_tests;
+        stats.depth_passes = ctx->metrics.depth_passes;
+        stats.depth_rejects = ctx->metrics.depth_rejects;
+        stats.depth_updates_planned = ctx->metrics.depth_updates_planned;
+        stats.depth_updates_committed = ctx->metrics.depth_updates_committed;
+        stats.depth_updates_discarded = ctx->metrics.depth_updates_discarded;
 #if SOFTRDP_ENABLE_PERF_LOG
         stats.triangle_count = ctx->metrics.triangle_count;
         stats.triangle_ticks = ctx->metrics.triangle_ticks;

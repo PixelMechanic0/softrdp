@@ -706,6 +706,22 @@ void PJ64_CALL ProcessRDPList(void)
                               rdp_command_name((rdp_command_id)stats.last_command_id),
                               (unsigned long long)stats.commands_seen,
                               (unsigned long long)stats.draw_calls_seen);
+            pj64_log_printf("  DIAG tri 08=%llu 09z=%llu 0atex=%llu 0btexz=%llu 0cshade=%llu 0dshadez=%llu 0eshadetex=%llu 0fshade_tex_z=%llu",
+                              (unsigned long long)stats.command_counts[RDP_CMD_FILL_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_FILL_ZBUFFER_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_TEXTURE_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_TEXTURE_ZBUFFER_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_SHADE_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_SHADE_ZBUFFER_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_SHADE_TEXTURE_TRIANGLE],
+                              (unsigned long long)stats.command_counts[RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE]);
+            pj64_log_printf("  DIAG depth tests=%llu pass=%llu reject=%llu planned=%llu committed=%llu discarded=%llu",
+                              (unsigned long long)stats.depth_tests,
+                              (unsigned long long)stats.depth_passes,
+                              (unsigned long long)stats.depth_rejects,
+                              (unsigned long long)stats.depth_updates_planned,
+                              (unsigned long long)stats.depth_updates_committed,
+                              (unsigned long long)stats.depth_updates_discarded);
             if (result != SR_OK) {
                 log_texture_debug(&stats);
             } else if (command_has_texture_debug(stats.last_command_id)) {

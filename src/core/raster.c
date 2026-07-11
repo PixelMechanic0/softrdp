@@ -4,6 +4,7 @@
 #include "pipeline.h"
 
 #include <stdint.h>
+#include <limits.h>
 
 #if SOFTRDP_ENABLE_PERF_LOG
 #define NOMINMAX
@@ -152,31 +153,31 @@ typedef struct raster_span {
 
 static bool triangle_span_for_y(const raster_triangle_setup *setup, int y, raster_span *span)
 {
-    int64_t xh;
-    int64_t xl;
-
-    // Center of scanline y is y * 4 + 2 subpixels
-    int64_t y_center = (int64_t)y * 4 + 2;
-    int64_t yh_base = (int64_t)setup->yh & ~3ll;
-    int64_t dy_h = y_center - yh_base;
-
-    // Triangle edge slopes are expressed per quarter scanline. Keep the left/right
-    // identity from the flip bit; swapping edges breaks valid right-major triangles.
-    xh = (int64_t)setup->xh + ((int64_t)setup->dxhdy * dy_h) / 4;
-    if (y_center < (int64_t)setup->ym) {
-        xl = (int64_t)setup->xm + ((int64_t)setup->dxmdy * dy_h) / 4;
-    } else {
-        int64_t dy_l = y_center - (int64_t)setup->ym;
-        xl = (int64_t)setup->xl + ((int64_t)setup->dxldy * dy_l) / 4;
-    }
-
     span->y = y;
-    if (setup->flip) {
-        span->x0 = fixed_ceil_16(xh);
-        span->x1 = fixed_ceil_16(xl) - 1;
-    } else {
-        span->x0 = fixed_ceil_16(xl);
-        span->x1 = fixed_ceil_16(xh) - 1;
+    span->x0 = INT_MAX;
+    span->x1 = INT_MIN;
+    const int64_t yh_base = (int64_t)setup->yh & ~3ll;
+
+    for (int sub = 0; sub < 4; sub++) {
+        const int64_t y_sub = (int64_t)y * 4 + sub;
+        if (y_sub < setup->yh || y_sub >= setup->yl) continue;
+
+        const int64_t dy_h = y_sub - yh_base;
+        const int64_t xh = (int64_t)setup->xh + ((int64_t)setup->dxhdy * dy_h) / 4;
+        int64_t xl;
+        if (y_sub < setup->ym) {
+            xl = (int64_t)setup->xm + ((int64_t)setup->dxmdy * dy_h) / 4;
+        } else {
+            const int64_t dy_l = y_sub - setup->ym;
+            xl = (int64_t)setup->xl + ((int64_t)setup->dxldy * dy_l) / 4;
+        }
+
+        const int x0 = setup->flip ? fixed_ceil_16(xh) : fixed_ceil_16(xl);
+        const int x1 = (setup->flip ? fixed_ceil_16(xl) : fixed_ceil_16(xh)) - 1;
+        if (x0 <= x1) {
+            if (x0 < span->x0) span->x0 = x0;
+            if (x1 > span->x1) span->x1 = x1;
+        }
     }
     return span->x0 <= span->x1;
 }
@@ -259,8 +260,8 @@ sr_result raster_submit_triangle(sr_memory *memory,
     const raster_decoded_triangle decoded = cmd->decoded.triangle;
     sr_result result = SR_OK;
 
-    const int yh = fixed_ceil_div(decoded.position.yh - 2, 4);
-    const int yl = fixed_ceil_div(decoded.position.yl - 2, 4);
+    const int yh = fixed_floor_div(decoded.position.yh, 4);
+    const int yl = fixed_ceil_div(decoded.position.yl, 4);
     const bool fill_triangle = cmd->id == RDP_CMD_FILL_TRIANGLE;
 
     if (yl <= yh) {

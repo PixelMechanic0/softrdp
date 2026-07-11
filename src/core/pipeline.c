@@ -260,6 +260,7 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
     if ((!primitive->triangle.has_depth && !depth->source_primitive) || depth->image_address == 0) {
         return SR_OK;
     }
+    if (primitive->metrics) primitive->metrics->depth_tests++;
 
     uint16_t old_compressed = rdp_depth_compress(0x3ffffu);
     const uint32_t new_depth = depth->source_primitive
@@ -299,17 +300,29 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
         result->address = addr;
         result->compressed = rdp_depth_pack(new_depth,
             rdp_depth_compress_delta(depth->pixel_delta_z));
+        if (primitive->metrics) primitive->metrics->depth_updates_planned++;
+    }
+    if (primitive->metrics) {
+        if (result->pass) primitive->metrics->depth_passes++;
+        else primitive->metrics->depth_rejects++;
     }
     return SR_OK;
 }
 
 static inline sr_result commit_depth_update(sr_memory *memory,
                                             const rdp_depth_result *depth,
-                                            bool fragment_accepted)
+                                            bool fragment_accepted,
+                                            rdp_metrics *metrics)
 {
-    if (!fragment_accepted || !depth->update) return SR_OK;
-    return sr_memory_write_be16(memory, depth->address, depth->compressed)
-        ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+    if (!depth->update) return SR_OK;
+    if (!fragment_accepted) {
+        if (metrics) metrics->depth_updates_discarded++;
+        return SR_OK;
+    }
+    if (!sr_memory_write_be16(memory, depth->address, depth->compressed))
+        return SR_ERROR_INVALID_ARGUMENT;
+    if (metrics) metrics->depth_updates_committed++;
+    return SR_OK;
 }
 
 sr_result pipeline_render_fill_triangle_span(sr_memory *memory,
@@ -348,7 +361,7 @@ sr_result pipeline_render_depth_triangle_span(sr_memory *memory,
             result = pipeline_write_fragment(memory, primitive, (uint32_t)x,
                                              (uint32_t)cursor.y, color, 0u, &accepted);
             if (result != SR_OK) return result;
-            result = commit_depth_update(memory, &depth, accepted);
+            result = commit_depth_update(memory, &depth, accepted, primitive->metrics);
             if (result != SR_OK) return result;
         }
         triangle_span_work_step(&primitive->triangle, primitive, &cursor);
@@ -394,7 +407,7 @@ sr_result pipeline_render_shade_depth_triangle_span(sr_memory *memory,
             if (result != SR_OK) {
                 return result;
             }
-            result = commit_depth_update(memory, &depth, accepted);
+            result = commit_depth_update(memory, &depth, accepted, primitive->metrics);
             if (result != SR_OK) return result;
         }
         triangle_span_work_step(&primitive->triangle, primitive, &cursor);
@@ -519,7 +532,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             }
         }
 
-        depth_result = commit_depth_update(memory, &depth, fragment_accepted);
+        depth_result = commit_depth_update(memory, &depth, fragment_accepted, primitive->metrics);
         if (depth_result != SR_OK) return depth_result;
 
         triangle_span_work_step(decoded, primitive, &cursor);

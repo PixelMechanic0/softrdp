@@ -246,6 +246,7 @@ sr_result rdp_execute_command(sr_memory *memory,
 {
     if (metrics) {
         metrics->commands_seen++;
+        if ((uint32_t)cmd->id < 64u) metrics->command_counts[cmd->id]++;
         if (rdp_command_is_draw(cmd->id)) {
             metrics->draw_calls_seen++;
         }
