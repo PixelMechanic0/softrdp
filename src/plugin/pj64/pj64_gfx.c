@@ -31,6 +31,12 @@ static uint32_t g_uploaded_frames;
 static uint64_t g_last_logged_commands;
 static uint64_t g_last_logged_draws;
 
+static bool g_dump_requested = false;
+static bool g_record_active = false;
+static FILE* g_frame_dump_file = NULL;
+static uint32_t g_recorded_lists_count = 0;
+static long g_list_count_offset = 0;
+
 #if SOFTRDP_ENABLE_PERF_LOG
 static sr_debug_stats g_perf_baseline_stats;
 static uint32_t g_perf_frame_count;
@@ -689,6 +695,84 @@ void PJ64_CALL ProcessRDPList(void)
     g_process_rdp_calls++;
 
     if (g_context) {
+        // Detect F11 keypress (edge-triggered) to dump current frame data
+        static bool g_f11_was_down = false;
+        bool f11_is_down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+        if (f11_is_down && !g_f11_was_down) {
+            g_dump_requested = true;
+            pj64_log_printf("F11 pressed: Requesting frame dump on next RDP list");
+        }
+        g_f11_was_down = f11_is_down;
+ 
+        if (g_dump_requested) {
+            g_dump_requested = false;
+            g_record_active = true;
+            g_recorded_lists_count = 0;
+            
+            g_frame_dump_file = fopen("frame_dump.bin", "wb");
+            if (g_frame_dump_file) {
+                uint32_t magic = 0x00444653; // "SFD\0"
+                uint32_t rdram_size = SR_RDRAM_MAX_SIZE;
+                uint32_t bswapped = g_gfx.MemoryBswaped ? 1 : 0;
+                uint32_t zero = 0;
+                
+                fwrite(&magic, 4, 1, g_frame_dump_file);
+                fwrite(&rdram_size, 4, 1, g_frame_dump_file);
+                fwrite(&bswapped, 4, 1, g_frame_dump_file);
+                g_list_count_offset = ftell(g_frame_dump_file);
+                fwrite(&zero, 4, 1, g_frame_dump_file); // list_count placeholder
+                
+                // Write initial RDRAM
+                fwrite(g_gfx.RDRAM, 1, SR_RDRAM_MAX_SIZE, g_frame_dump_file);
+                
+                pj64_log_printf("Starting frame dump recording (triggered by list)...");
+            } else {
+                g_record_active = false;
+                pj64_log_printf("ERROR: Could not open frame_dump.bin for writing!");
+            }
+        }
+ 
+        if (g_record_active && g_frame_dump_file) {
+            uint32_t current = read_reg_value(g_gfx.DPC_CURRENT_REG) & ~7u;
+            uint32_t end = read_reg_value(g_gfx.DPC_END_REG) & ~7u;
+            uint32_t size = (end > current && end <= SR_RDRAM_MAX_SIZE) ? (end - current) : 0;
+            
+            uint32_t dp_regs[8];
+            dp_regs[0] = read_reg_value(g_gfx.DPC_START_REG);
+            dp_regs[1] = read_reg_value(g_gfx.DPC_END_REG);
+            dp_regs[2] = read_reg_value(g_gfx.DPC_CURRENT_REG);
+            dp_regs[3] = read_reg_value(g_gfx.DPC_STATUS_REG);
+            dp_regs[4] = read_reg_value(g_gfx.DPC_CLOCK_REG);
+            dp_regs[5] = read_reg_value(g_gfx.DPC_BUFBUSY_REG);
+            dp_regs[6] = read_reg_value(g_gfx.DPC_PIPEBUSY_REG);
+            dp_regs[7] = read_reg_value(g_gfx.DPC_TMEM_REG);
+            
+            uint32_t vi_regs[14];
+            vi_regs[0] = read_reg_value(g_gfx.VI_STATUS_REG);
+            vi_regs[1] = read_reg_value(g_gfx.VI_ORIGIN_REG);
+            vi_regs[2] = read_reg_value(g_gfx.VI_WIDTH_REG);
+            vi_regs[3] = read_reg_value(g_gfx.VI_INTR_REG);
+            vi_regs[4] = read_reg_value(g_gfx.VI_V_CURRENT_LINE_REG);
+            vi_regs[5] = read_reg_value(g_gfx.VI_TIMING_REG);
+            vi_regs[6] = read_reg_value(g_gfx.VI_V_SYNC_REG);
+            vi_regs[7] = read_reg_value(g_gfx.VI_H_SYNC_REG);
+            vi_regs[8] = read_reg_value(g_gfx.VI_LEAP_REG);
+            vi_regs[9] = read_reg_value(g_gfx.VI_H_START_REG);
+            vi_regs[10] = read_reg_value(g_gfx.VI_V_START_REG);
+            vi_regs[11] = read_reg_value(g_gfx.VI_V_BURST_REG);
+            vi_regs[12] = read_reg_value(g_gfx.VI_X_SCALE_REG);
+            vi_regs[13] = read_reg_value(g_gfx.VI_Y_SCALE_REG);
+            
+            fwrite(&size, 4, 1, g_frame_dump_file);
+            fwrite(dp_regs, 4, 8, g_frame_dump_file);
+            fwrite(vi_regs, 4, 14, g_frame_dump_file);
+            
+            if (size > 0) {
+                fwrite(g_gfx.RDRAM + current, 1, size, g_frame_dump_file);
+            }
+            g_recorded_lists_count++;
+        }
+
         result = sr_process_rdp_list(g_context);
         stats = sr_get_debug_stats(g_context);
         if (PJ64_LOG_ENABLED &&
@@ -762,6 +846,22 @@ void PJ64_CALL UpdateScreen(void)
 
     (void)start_runtime();
     g_update_screen_calls++;
+
+    if (g_record_active) {
+        g_record_active = false;
+        if (g_frame_dump_file) {
+            // Write final reference RDRAM output
+            fwrite(g_gfx.RDRAM, 1, SR_RDRAM_MAX_SIZE, g_frame_dump_file);
+            
+            // Update list count in header
+            fseek(g_frame_dump_file, g_list_count_offset, SEEK_SET);
+            fwrite(&g_recorded_lists_count, 4, 1, g_frame_dump_file);
+            
+            fclose(g_frame_dump_file);
+            g_frame_dump_file = NULL;
+            pj64_log_printf("Frame dump completed successfully! Recorded %u lists.", g_recorded_lists_count);
+        }
+    }
 
     if (!g_context || !g_present.ready || target.width == 0 ||
         target.height == 0 || !ensure_frame_storage(target.width, target.height)) {

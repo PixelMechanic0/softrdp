@@ -235,6 +235,8 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         ctx->debug.last_command_id = (uint32_t)cmd.id;
         cmd.word_count = rdp_command_word_count(cmd.id);
         if (cmd.word_count == 0 || cmd.word_count > SR_MAX_COMMAND_WORDS) {
+            printf("  DEBUG: Bad command! id=0x%02x, word_count=%u, offset=%u\n",
+                   (uint32_t)cmd.id, cmd.word_count, current - ctx->debug.last_list_current);
             ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
             finish_rdp_list(ctx, end, false);
             return SR_ERROR_BAD_COMMAND;

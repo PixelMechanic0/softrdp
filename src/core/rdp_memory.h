@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 typedef struct sr_memory {
     uint8_t *rdram;
@@ -22,14 +23,28 @@ static inline uint32_t rdram_byte_index(const sr_memory *mem, uint32_t addr)
 
 static inline bool sr_memory_read_u8(const sr_memory *mem, uint32_t addr, uint8_t *value)
 {
-    if (!mem || !mem->rdram || !value || addr >= mem->rdram_size) return false;
+    if (!mem || !mem->rdram || !value || addr >= mem->rdram_size) {
+        static int printed = 0;
+        if (printed < 5) {
+            printf("  DEBUG: sr_memory_read_u8 failed! addr=0x%08x, rdram_size=0x%08x\n", addr, mem ? mem->rdram_size : 0);
+            printed++;
+        }
+        return false;
+    }
     *value = mem->rdram[rdram_byte_index(mem, addr)];
     return true;
 }
 
 static inline bool sr_memory_read_be16(const sr_memory *mem, uint32_t addr, uint16_t *value)
 {
-    if (!mem || !mem->rdram || !value || addr + 1u >= mem->rdram_size) return false;
+    if (!mem || !mem->rdram || !value || addr + 1u >= mem->rdram_size) {
+        static int printed = 0;
+        if (printed < 5) {
+            printf("  DEBUG: sr_memory_read_be16 failed! addr=0x%08x, rdram_size=0x%08x\n", addr, mem ? mem->rdram_size : 0);
+            printed++;
+        }
+        return false;
+    }
     *value = ((uint16_t)mem->rdram[rdram_byte_index(mem, addr)] << 8) |
              ((uint16_t)mem->rdram[rdram_byte_index(mem, addr + 1u)]);
     return true;
@@ -37,7 +52,14 @@ static inline bool sr_memory_read_be16(const sr_memory *mem, uint32_t addr, uint
 
 static inline bool sr_memory_read_be32(const sr_memory *mem, uint32_t addr, uint32_t *value)
 {
-    if (!mem || !mem->rdram || !value || addr + 3u >= mem->rdram_size) return false;
+    if (!mem || !mem->rdram || !value || addr + 3u >= mem->rdram_size) {
+        static int printed = 0;
+        if (printed < 5) {
+            printf("  DEBUG: sr_memory_read_be32 failed! addr=0x%08x, rdram_size=0x%08x\n", addr, mem ? mem->rdram_size : 0);
+            printed++;
+        }
+        return false;
+    }
     *value = ((uint32_t)mem->rdram[rdram_byte_index(mem, addr)] << 24) |
              ((uint32_t)mem->rdram[rdram_byte_index(mem, addr + 1u)] << 16) |
              ((uint32_t)mem->rdram[rdram_byte_index(mem, addr + 2u)] << 8) |
