@@ -28,6 +28,14 @@ struct sr_context {
     sr_debug_stats debug;
 };
 
+#define SR_STATE_SNAPSHOT_MAGIC 0x31535253u /* "SRS1" */
+typedef struct sr_state_snapshot {
+    uint32_t magic;
+    uint32_t size;
+    rdp_state rdp;
+    tmem_state tmem;
+} sr_state_snapshot;
+
 #define DP_STATUS_XBUS_DMA 0x001u
 #define DP_INTERRUPT 0x20u
 #define MAX_RDP_LIST_BYTES (1024u * 1024u)
@@ -35,6 +43,36 @@ struct sr_context {
 static uint32_t read_reg(uint32_t *const *regs, uint32_t index)
 {
     return regs[index] ? *regs[index] : 0;
+}
+
+size_t sr_state_snapshot_size(void)
+{
+    return sizeof(sr_state_snapshot);
+}
+
+sr_result sr_save_state(const sr_context *ctx, void *data, size_t size)
+{
+    if (!ctx || !data || size != sizeof(sr_state_snapshot)) return SR_ERROR_INVALID_ARGUMENT;
+    sr_state_snapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.magic = SR_STATE_SNAPSHOT_MAGIC;
+    snapshot.size = (uint32_t)sizeof(snapshot);
+    snapshot.rdp = ctx->rdp;
+    snapshot.tmem = ctx->tmem;
+    memcpy(data, &snapshot, sizeof(snapshot));
+    return SR_OK;
+}
+
+sr_result sr_load_state(sr_context *ctx, const void *data, size_t size)
+{
+    if (!ctx || !data || size != sizeof(sr_state_snapshot)) return SR_ERROR_INVALID_ARGUMENT;
+    sr_state_snapshot snapshot;
+    memcpy(&snapshot, data, sizeof(snapshot));
+    if (snapshot.magic != SR_STATE_SNAPSHOT_MAGIC || snapshot.size != sizeof(snapshot))
+        return SR_ERROR_INVALID_ARGUMENT;
+    ctx->rdp = snapshot.rdp;
+    ctx->tmem = snapshot.tmem;
+    return SR_OK;
 }
 
 static void write_reg(uint32_t *const *regs, uint32_t index, uint32_t value)

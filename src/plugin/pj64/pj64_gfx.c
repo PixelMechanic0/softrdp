@@ -692,19 +692,31 @@ void PJ64_CALL ProcessRDPList(void)
             
             g_frame_dump_file = fopen("frame_dump.bin", "wb");
             if (g_frame_dump_file) {
-                uint32_t magic = 0x00444653; // "SFD\0"
+                uint32_t magic = 0x32444653; // "SFD2"
                 uint32_t rdram_size = SR_RDRAM_MAX_SIZE;
                 uint32_t bswapped = g_gfx.MemoryBswaped ? 1 : 0;
                 uint32_t zero = 0;
+                uint32_t state_size = (uint32_t)sr_state_snapshot_size();
+                void *state = malloc(state_size);
                 
                 fwrite(&magic, 4, 1, g_frame_dump_file);
                 fwrite(&rdram_size, 4, 1, g_frame_dump_file);
                 fwrite(&bswapped, 4, 1, g_frame_dump_file);
                 g_list_count_offset = ftell(g_frame_dump_file);
                 fwrite(&zero, 4, 1, g_frame_dump_file); // list_count placeholder
+                fwrite(&state_size, 4, 1, g_frame_dump_file);
+                if (state && sr_save_state(g_context, state, state_size) == SR_OK)
+                    fwrite(state, 1, state_size, g_frame_dump_file);
+                else {
+                    pj64_log_printf("ERROR: Could not capture RDP state for frame dump");
+                    fclose(g_frame_dump_file);
+                    g_frame_dump_file = NULL;
+                    g_record_active = false;
+                }
+                free(state);
                 
                 // Write initial RDRAM
-                fwrite(g_gfx.RDRAM, 1, SR_RDRAM_MAX_SIZE, g_frame_dump_file);
+                if (g_frame_dump_file) fwrite(g_gfx.RDRAM, 1, SR_RDRAM_MAX_SIZE, g_frame_dump_file);
                 
                 pj64_log_printf("Starting frame dump recording (triggered by list)...");
             } else {

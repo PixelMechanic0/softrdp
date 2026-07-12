@@ -3,6 +3,7 @@
 
 #include "sr_defs.h"
 #include "sr_host.h"
+#include <stddef.h>
 
 typedef struct sr_context sr_context;
 
@@ -108,5 +109,10 @@ sr_result sr_process_rdp_list(sr_context *ctx);
 sr_result sr_get_vi_frame_info(sr_context *ctx, sr_vi_frame_info *info);
 sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out);
 sr_debug_stats sr_get_debug_stats(const sr_context *ctx);
+
+/* Opaque, versioned RDP/TMEM state used by diagnostic frame dumps. */
+size_t sr_state_snapshot_size(void);
+sr_result sr_save_state(const sr_context *ctx, void *data, size_t size);
+sr_result sr_load_state(sr_context *ctx, const void *data, size_t size);
 
 #endif
