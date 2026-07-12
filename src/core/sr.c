@@ -82,6 +82,26 @@ static void write_reg(uint32_t *const *regs, uint32_t index, uint32_t value)
     }
 }
 
+static void capture_texture_debug(sr_debug_stats *debug, const rdp_state *state,
+                                  const rdp_command *cmd);
+
+static sr_result execute_rdp_command(sr_context *ctx, rdp_command *cmd)
+{
+    sr_result result = rdp_decode_command(cmd);
+    if (result == SR_OK)
+        result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, cmd);
+    if (result != SR_OK) {
+        capture_texture_debug(&ctx->debug, &ctx->rdp, cmd);
+        return result;
+    }
+    ctx->debug.color_image_format = (uint32_t)ctx->rdp.color_image.format;
+    ctx->debug.color_image_size = (uint32_t)ctx->rdp.color_image.size;
+    ctx->debug.color_image_width = ctx->rdp.color_image.width;
+    ctx->debug.color_image_address = ctx->rdp.color_image.address;
+    capture_texture_debug(&ctx->debug, &ctx->rdp, cmd);
+    return SR_OK;
+}
+
 static bool read_command_word(const sr_context *ctx, bool xbus_dma, uint32_t word_index, uint32_t *word)
 {
     if (xbus_dma) {
@@ -266,6 +286,35 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         return SR_ERROR_BAD_COMMAND;
     }
 
+    if (ctx->cmd_words_loaded == 0u) {
+        uint32_t first_word;
+        if (read_command_word(ctx, xbus_dma, current >> 2, &first_word)) {
+            const uint8_t command_id = (uint8_t)((first_word >> 24) & 0x3fu);
+            const uint32_t word_count = rdp_command_word_count((rdp_command_id)command_id);
+            if (word_count != 0u && word_count <= SR_MAX_COMMAND_WORDS &&
+                end - current == word_count * 4u) {
+                rdp_command cmd;
+                cmd.id = (rdp_command_id)command_id;
+                cmd.word_count = (uint8_t)word_count;
+                cmd.words[0] = first_word;
+                for (uint32_t word = 1; word < word_count; word++) {
+                    if (!read_command_word(ctx, xbus_dma, (current >> 2) + word,
+                                           &cmd.words[word])) {
+                        ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
+                        finish_rdp_list(ctx, end, false);
+                        return SR_ERROR_BAD_COMMAND;
+                    }
+                }
+                ctx->debug.last_command_address = current;
+                ctx->debug.last_command_id = command_id;
+                const sr_result result = execute_rdp_command(ctx, &cmd);
+                ctx->debug.last_result = result;
+                finish_rdp_list(ctx, end, result == SR_OK && cmd.id == RDP_CMD_SYNC_FULL);
+                return result;
+            }
+        }
+    }
+
     while (current < end) {
         if (ctx->cmd_words_loaded == 0) {
             uint32_t first_word = 0;
@@ -321,14 +370,10 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         /* Reset stateful reader for next command */
         ctx->cmd_words_loaded = 0;
 
-        sr_result result = rdp_decode_command(&cmd);
-        if (result == SR_OK) {
-            result = rdp_execute_command(&ctx->memory, &ctx->tmem, &ctx->rdp, &cmd);
-        }
+        sr_result result = execute_rdp_command(ctx, &cmd);
 
         if (result != SR_OK) {
             ctx->debug.last_result = result;
-            capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
             finish_rdp_list(ctx, end, false);
             return result;
         }
@@ -337,11 +382,6 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
             full_sync_seen = true;
         }
 
-        ctx->debug.color_image_format = (uint32_t)ctx->rdp.color_image.format;
-        ctx->debug.color_image_size = (uint32_t)ctx->rdp.color_image.size;
-        ctx->debug.color_image_width = ctx->rdp.color_image.width;
-        ctx->debug.color_image_address = ctx->rdp.color_image.address;
-        capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
     }
 
     finish_rdp_list(ctx, end, full_sync_seen);

@@ -34,6 +34,8 @@ static FILE* g_frame_dump_file = NULL;
 static uint32_t g_rdram_size = 0x400000;
 enum { FRAME_DUMP_PRESENT_COUNT = 4u };
 static uint32_t g_dump_presents_remaining = 0;
+static uint8_t *g_dump_rdram_shadow = NULL;
+enum { FRAME_DUMP_PAGE_SIZE = 4096u };
 
 static bool dump_write_all(FILE *file, const void *data, size_t size)
 {
@@ -238,6 +240,30 @@ static const char *result_name(sr_result result)
     }
 }
 #endif
+
+static bool dump_write_rdram_deltas(FILE *file)
+{
+    uint32_t changed[2048];
+    uint32_t changed_count = 0;
+    if (!file || !g_dump_rdram_shadow || !g_gfx.RDRAM ||
+        g_rdram_size / FRAME_DUMP_PAGE_SIZE > 2048u) return false;
+    const uint32_t page_count = g_rdram_size / FRAME_DUMP_PAGE_SIZE;
+    for (uint32_t page = 0; page < page_count; page++) {
+        const uint32_t offset = page * FRAME_DUMP_PAGE_SIZE;
+        if (memcmp(g_dump_rdram_shadow + offset, g_gfx.RDRAM + offset,
+                   FRAME_DUMP_PAGE_SIZE) != 0)
+            changed[changed_count++] = page;
+    }
+    if (fwrite(&changed_count, 4, 1, file) != 1) return false;
+    for (uint32_t i = 0; i < changed_count; i++) {
+        const uint32_t page = changed[i];
+        const uint32_t offset = page * FRAME_DUMP_PAGE_SIZE;
+        if (fwrite(&page, 4, 1, file) != 1 ||
+            !dump_write_all(file, g_gfx.RDRAM + offset, FRAME_DUMP_PAGE_SIZE)) return false;
+        memcpy(g_dump_rdram_shadow + offset, g_gfx.RDRAM + offset, FRAME_DUMP_PAGE_SIZE);
+    }
+    return true;
+}
 
 static bool command_has_texture_debug(uint32_t command_id)
 {
@@ -717,7 +743,7 @@ void PJ64_CALL ProcessRDPList(void)
             
             g_frame_dump_file = fopen("frame_dump.bin", "wb");
             if (g_frame_dump_file) {
-                uint32_t magic = 0x32444653; // "SFD2"
+                uint32_t magic = 0x34444653; // "SFD4"
                 uint32_t rdram_size = g_rdram_size;
                 uint32_t bswapped = g_gfx.MemoryBswaped ? 1 : 0;
                 uint32_t zero = 0;
@@ -747,6 +773,18 @@ void PJ64_CALL ProcessRDPList(void)
                     fclose(g_frame_dump_file);
                     g_frame_dump_file = NULL;
                     g_record_active = false;
+                }
+                free(g_dump_rdram_shadow);
+                g_dump_rdram_shadow = NULL;
+                if (g_frame_dump_file) {
+                    g_dump_rdram_shadow = malloc(g_rdram_size);
+                    if (g_dump_rdram_shadow)
+                        memcpy(g_dump_rdram_shadow, g_gfx.RDRAM, g_rdram_size);
+                    else {
+                        fclose(g_frame_dump_file);
+                        g_frame_dump_file = NULL;
+                        g_record_active = false;
+                    }
                 }
                 
                 pj64_log_printf("Starting frame dump recording for %u presented frames...",
@@ -788,14 +826,21 @@ void PJ64_CALL ProcessRDPList(void)
             vi_regs[12] = read_reg_value(g_gfx.VI_X_SCALE_REG);
             vi_regs[13] = read_reg_value(g_gfx.VI_Y_SCALE_REG);
             
-            fwrite(&size, 4, 1, g_frame_dump_file);
-            fwrite(dp_regs, 4, 8, g_frame_dump_file);
-            fwrite(vi_regs, 4, 14, g_frame_dump_file);
-            
-            if (size > 0) {
-                fwrite(g_gfx.RDRAM + current, 1, size, g_frame_dump_file);
+            if (!dump_write_rdram_deltas(g_frame_dump_file)) {
+                pj64_log_printf("ERROR: Could not write RDRAM deltas to frame dump");
+                fclose(g_frame_dump_file);
+                g_frame_dump_file = NULL;
+                g_record_active = false;
+                free(g_dump_rdram_shadow);
+                g_dump_rdram_shadow = NULL;
+            } else {
+                fwrite(&size, 4, 1, g_frame_dump_file);
+                fwrite(dp_regs, 4, 8, g_frame_dump_file);
+                fwrite(vi_regs, 4, 14, g_frame_dump_file);
+                if (size > 0)
+                    fwrite(g_gfx.RDRAM + current, 1, size, g_frame_dump_file);
+                g_recorded_lists_count++;
             }
-            g_recorded_lists_count++;
         }
 
         result = sr_process_rdp_list(g_context);
@@ -882,8 +927,9 @@ void PJ64_CALL UpdateScreen(void)
     }
     sr_present_set_display_size(&g_present, g_display_width, g_display_height);
 
-    if (g_record_active && g_dump_presents_remaining > 0u)
+    if (g_record_active && g_dump_presents_remaining > 0u) {
         g_dump_presents_remaining--;
+    }
 
     if (g_record_active && g_dump_presents_remaining == 0u) {
         g_record_active = false;
@@ -897,6 +943,8 @@ void PJ64_CALL UpdateScreen(void)
                                      fwrite(&g_recorded_lists_count, 4, 1, g_frame_dump_file) == 1;
             const bool closed = fclose(g_frame_dump_file) == 0;
             g_frame_dump_file = NULL;
+            free(g_dump_rdram_shadow);
+            g_dump_rdram_shadow = NULL;
             if (wrote_rdram && wrote_count && closed)
                 pj64_log_printf("Frame dump completed successfully! Recorded %u lists.", g_recorded_lists_count);
             else

@@ -113,7 +113,16 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
         primitive->texture.tile.size == RDP_SIZE_16BPP &&
         !primitive->texture.tlut_enable) {
         primitive->texture.sampler_class = primitive->texture.bilerp && primitive->texture.sample_quad
-            ? 2u : 1u;
+            ? RDP_SAMPLER_RGBA16_BILERP : RDP_SAMPLER_RGBA16_POINT;
+    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
+               primitive->texture.tile.format == RDP_FORMAT_I &&
+               primitive->texture.tile.size == RDP_SIZE_4BPP) {
+        primitive->texture.sampler_class = RDP_SAMPLER_I4_BILERP;
+    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
+               primitive->texture.tile.format == RDP_FORMAT_CI &&
+               primitive->texture.tile.size == RDP_SIZE_8BPP &&
+               primitive->texture.tlut_enable) {
+        primitive->texture.sampler_class = RDP_SAMPLER_CI8_TLUT_BILERP;
     }
 }
 
@@ -141,10 +150,14 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
         plan->stages |= RDP_BLOCK_STAGE_SHADE;
     if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1)) {
         plan->stages |= RDP_BLOCK_STAGE_TEXTURE;
-        plan->sampler = primitive->texture.sampler_class == 2u
+        plan->sampler = primitive->texture.sampler_class == RDP_SAMPLER_RGBA16_BILERP
             ? RDP_BLOCK_SAMPLER_RGBA16_BILERP
-            : primitive->texture.sampler_class == 1u
-                ? RDP_BLOCK_SAMPLER_RGBA16_POINT : RDP_BLOCK_SAMPLER_GENERIC;
+            : primitive->texture.sampler_class == RDP_SAMPLER_RGBA16_POINT
+                ? RDP_BLOCK_SAMPLER_RGBA16_POINT
+                : primitive->texture.sampler_class == RDP_SAMPLER_I4_BILERP
+                    ? RDP_BLOCK_SAMPLER_I4_BILERP
+                    : primitive->texture.sampler_class == RDP_SAMPLER_CI8_TLUT_BILERP
+                        ? RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP : RDP_BLOCK_SAMPLER_GENERIC;
     } else {
         plan->sampler = RDP_BLOCK_SAMPLER_NONE;
     }

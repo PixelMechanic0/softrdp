@@ -341,6 +341,19 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
     
     uint32_t count = packet->count;
     uint32_t chunks = count >> 3;
+    const uint32_t remainder = count & 7u;
+    if (remainder >= 4u) {
+        const uint32_t padded_end = (chunks + 1u) << 3;
+        for (uint32_t lane = count; lane < padded_end; lane++) {
+            for (uint32_t component = 0; component < 4u; component++) {
+                packet->shade[component][lane] = 0u;
+                packet->texel0[component][lane] = 0u;
+                packet->texel1[component][lane] = 0u;
+            }
+            packet->lod_fraction[lane] = 0u;
+        }
+        chunks++;
+    }
     uint16_t combined[4][RDP_PACKET_LANES] = {{0}};
     
     for (uint32_t chunk = 0; chunk < chunks; chunk++) {

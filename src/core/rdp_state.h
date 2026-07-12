@@ -180,6 +180,14 @@ typedef struct rdp_framebuffer_state {
     uint8_t bytes_per_pixel;
 } rdp_framebuffer_state;
 
+typedef enum rdp_sampler_class {
+    RDP_SAMPLER_GENERIC = 0,
+    RDP_SAMPLER_RGBA16_POINT,
+    RDP_SAMPLER_RGBA16_BILERP,
+    RDP_SAMPLER_I4_BILERP,
+    RDP_SAMPLER_CI8_TLUT_BILERP
+} rdp_sampler_class;
+
 typedef struct rdp_texture_sample_state {
     rdp_tile tile;
     rdp_tile_bounds bounds;
@@ -187,7 +195,7 @@ typedef struct rdp_texture_sample_state {
     uint16_t height;
     uint16_t stride;
     uint8_t tile_index;
-    uint8_t sampler_class;
+    rdp_sampler_class sampler_class;
     bool perspective;
     bool tlut_enable;
     bool tlut_ia;

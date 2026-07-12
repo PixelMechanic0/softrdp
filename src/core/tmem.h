@@ -685,6 +685,73 @@ static inline bool tmem_sample_rgba16_point_fixed5(const tmem_state *tmem,
            tmem_fetch_rgba16_local(tmem, sample, local_s, local_t, color);
 }
 
+static inline bool tmem_fetch_i4_ci8_local(const tmem_state *tmem,
+                                            const rdp_texture_sample_state *sample,
+                                            uint32_t local_s, uint32_t local_t,
+                                            rdp_color *color)
+{
+    tmem_texel_address address;
+    if (!tmem_resolve_texel_address_raw(&sample->tile, sample->stride,
+                                        local_s, local_t, &address) ||
+        address.byte >= SR_TMEM_SIZE || address.bytes != 1u) return false;
+    if (sample->sampler_class == RDP_SAMPLER_I4_BILERP) {
+        const uint8_t packed = tmem->bytes[address.byte];
+        const uint8_t intensity = expand_4_to_8(
+            address.subtexel ? (packed & 0xfu) : (packed >> 4));
+        *color = (rdp_color){ intensity, intensity, intensity, intensity };
+        return true;
+    }
+    const uint32_t palette_addr = 0x800u + (uint32_t)tmem->bytes[address.byte] * 8u;
+    if (palette_addr + 1u >= SR_TMEM_SIZE) return false;
+    const uint16_t entry = ((uint16_t)tmem->bytes[palette_addr] << 8) |
+                           (uint16_t)tmem->bytes[palette_addr + 1u];
+    if (sample->tlut_ia) {
+        const uint8_t intensity = (uint8_t)(entry >> 8);
+        *color = (rdp_color){ intensity, intensity, intensity, (uint8_t)entry };
+    } else {
+        *color = tmem_rgba16_decode_table[entry];
+    }
+    return true;
+}
+
+static inline bool tmem_sample_i4_ci8_bilerp_fixed5(const tmem_state *tmem,
+                                                     const rdp_texture_sample_state *sample,
+                                                     int32_t s_fixed, int32_t t_fixed,
+                                                     rdp_color *color)
+{
+    uint32_t s0, t0, s1, t1;
+    if (!color || !tmem_resolve_compiled_axis_fixed5(sample, s_fixed, true, &s0) ||
+        !tmem_resolve_compiled_axis_fixed5(sample, s_fixed + 32, true, &s1) ||
+        !tmem_resolve_compiled_axis_fixed5(sample, t_fixed, false, &t0) ||
+        !tmem_resolve_compiled_axis_fixed5(sample, t_fixed + 32, false, &t1))
+        return false;
+    const rdp_tile *tile = &sample->tile;
+    const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed, tile->shift_s);
+    const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed, tile->shift_t);
+    const uint32_t frac_s = (uint32_t)(shifted_s - ((int32_t)tile->sl << 3)) & 31u;
+    const uint32_t frac_t = (uint32_t)(shifted_t - ((int32_t)tile->tl << 3)) & 31u;
+    rdp_color c00, c10, c01, c11;
+    if (tmem_fetch_i4_ci8_local(tmem, sample, s0, t0, &c00) &&
+        tmem_fetch_i4_ci8_local(tmem, sample, s1, t0, &c10) &&
+        tmem_fetch_i4_ci8_local(tmem, sample, s0, t1, &c01) &&
+        tmem_fetch_i4_ci8_local(tmem, sample, s1, t1, &c11)) {
+        if (sample->mid_texel && frac_s == 16u && frac_t == 16u) {
+            *color = (rdp_color){
+                (uint8_t)(((uint32_t)c00.r + c10.r + c01.r + c11.r + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.g + c10.g + c01.g + c11.g + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.b + c10.b + c01.b + c11.b + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.a + c10.a + c01.a + c11.a + 2u) >> 2)
+            };
+        } else if (frac_s + frac_t >= 32u) {
+            *color = bilerp_3tap_color(c11, c10, c01, 32u - frac_t, 32u - frac_s);
+        } else {
+            *color = bilerp_3tap_color(c00, c10, c01, frac_s, frac_t);
+        }
+        return true;
+    }
+    return tmem_fetch_i4_ci8_local(tmem, sample, s0, t0, color);
+}
+
 static inline bool tmem_sample_rgba16_bilerp_fixed5(const tmem_state *tmem,
                                                      const rdp_texture_sample_state *sample,
                                                      int32_t s_fixed, int32_t t_fixed,
@@ -776,10 +843,13 @@ static inline bool tmem_sample_color_fixed5(const tmem_state *tmem, const rdp_te
 {
     if (!color || !sample || sample->tile_index >= 8) return false;
     if (sample->width && sample->height && sample->stride) {
-        if (sample->sampler_class == 2u)
+        if (sample->sampler_class == RDP_SAMPLER_RGBA16_BILERP)
             return tmem_sample_rgba16_bilerp_fixed5(tmem, sample, s_fixed, t_fixed, color);
-        if (sample->sampler_class == 1u)
+        if (sample->sampler_class == RDP_SAMPLER_RGBA16_POINT)
             return tmem_sample_rgba16_point_fixed5(tmem, sample, s_fixed, t_fixed, color);
+        if (sample->sampler_class == RDP_SAMPLER_I4_BILERP ||
+            sample->sampler_class == RDP_SAMPLER_CI8_TLUT_BILERP)
+            return tmem_sample_i4_ci8_bilerp_fixed5(tmem, sample, s_fixed, t_fixed, color);
         return sample->bilerp && sample->sample_quad
             ? tmem_sample_bilerp_compiled_fixed5(tmem, sample, s_fixed, t_fixed, color)
             : tmem_sample_point_compiled_fixed5(tmem, sample, s_fixed, t_fixed, color);

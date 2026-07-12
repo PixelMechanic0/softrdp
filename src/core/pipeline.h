@@ -52,7 +52,9 @@ typedef enum rdp_block_sampler_kind {
     RDP_BLOCK_SAMPLER_NONE = 0,
     RDP_BLOCK_SAMPLER_GENERIC,
     RDP_BLOCK_SAMPLER_RGBA16_POINT,
-    RDP_BLOCK_SAMPLER_RGBA16_BILERP
+    RDP_BLOCK_SAMPLER_RGBA16_BILERP,
+    RDP_BLOCK_SAMPLER_I4_BILERP,
+    RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP
 } rdp_block_sampler_kind;
 
 typedef enum rdp_block_coord_kind {
