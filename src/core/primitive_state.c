@@ -39,6 +39,8 @@ void pipeline_compile_framebuffer(rdp_framebuffer_state *framebuffer,
 
     framebuffer->color_image = registers->color_image;
     framebuffer->fill_color = registers->fill_color;
+    framebuffer->bytes_per_pixel = registers->color_image.size == RDP_SIZE_32BPP ? 4u :
+                                   registers->color_image.size == RDP_SIZE_16BPP ? 2u : 1u;
 }
 
 static void pipeline_compile_common(rdp_primitive_state *primitive,
@@ -70,6 +72,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.primitive_color = registers->primitive_color;
     primitive->color.environment_color = registers->environment_color;
     primitive->color.cycle_type = registers->other_modes.cycle_type;
+    primitive->color.two_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2;
     primitive->color.primitive_lod_fraction = registers->primitive_lod_fraction;
     primitive->color.needs_texel0 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL0) != 0;
     primitive->color.needs_texel1 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL1) != 0;
@@ -83,6 +86,8 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.blend.force_blend = registers->other_modes.force_blend;
     primitive->fragment.blend.image_read = registers->other_modes.image_read;
     primitive->fragment.blend.alpha_compare = registers->other_modes.alpha_compare;
+    primitive->fragment.blend.cycle_count = registers->other_modes.cycle_type == RDP_CYCLE_2 ? 2u : 1u;
+    primitive->fragment.blend.final_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2 ? 1u : 0u;
     primitive->fragment.alpha_cvg_select = registers->other_modes.alpha_cvg_select;
     primitive->fragment.cvg_times_alpha = registers->other_modes.cvg_times_alpha;
     primitive->fragment.antialias = registers->other_modes.antialias;

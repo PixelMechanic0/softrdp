@@ -59,7 +59,7 @@ typedef struct rdp_depth_result {
 static inline sr_result scalar_depth_test(sr_memory *memory,
                                           const rdp_primitive_state *primitive,
                                           const rdp_span_work *cursor,
-                                          int x,
+                                          uint32_t addr,
                                           rdp_depth_result *result)
 {
     const rdp_depth_state *depth = &primitive->fragment.depth;
@@ -80,9 +80,6 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
     } else {
         new_depth = (uint16_t)((uint64_t)linear >> 16);
     }
-    const uint32_t pixel = (uint32_t)cursor->y * primitive->framebuffer.color_image.width + (uint32_t)x;
-    const uint32_t addr = depth->image_address + pixel * 2u;
-
     if ((depth->compare || depth->update) &&
         !sr_memory_read_be16(memory, addr, &old_depth)) {
         return SR_ERROR_INVALID_ARGUMENT;
@@ -111,43 +108,36 @@ static inline sr_result commit_depth_update(sr_memory *memory,
     return SR_OK;
 }
 
-typedef struct pipeline_triangle_block {
-    uint32_t count;
-    int x[RDP_PACKET_LANES];
-    int64_t depth_fixed[RDP_PACKET_LANES];
-    int32_t s[RDP_PACKET_LANES], t[RDP_PACKET_LANES], w[RDP_PACKET_LANES];
-    int32_t sample_s[RDP_PACKET_LANES], sample_t[RDP_PACKET_LANES];
-    int32_t shade[4][RDP_PACKET_LANES];
-    rdp_depth_result depth[RDP_PACKET_LANES];
-    rdp_combiner_packet combiner;
-    uint16_t live_mask;
-    uint16_t fallback_mask;
-} pipeline_triangle_block;
-
 static void setup_triangle_block(const rdp_primitive_state *primitive,
                                  rdp_span_work *cursor,
                                  uint32_t count,
-                                 pipeline_triangle_block *block)
+                                 rdp_fragment_block *block)
 {
     block->count = count;
-    block->combiner.count = count;
-    block->live_mask = count == RDP_PACKET_LANES ? 0xffffu : (uint16_t)((1u << count) - 1u);
+    block->active_mask = count == RDP_PACKET_LANES ? 0xffffu : (uint16_t)((1u << count) - 1u);
     block->fallback_mask = 0u;
+    block->depth_update_mask = 0u;
+    block->y = (uint32_t)cursor->y;
+    const uint32_t first_pixel = (uint32_t)cursor->y * primitive->framebuffer.color_image.width +
+                                 (uint32_t)cursor->x_begin;
+    const uint32_t first_color_address = primitive->framebuffer.color_image.address +
+                                         first_pixel * primitive->framebuffer.bytes_per_pixel;
     const raster_decoded_triangle *decoded = &primitive->triangle;
     const int32_t dr[4] = { decoded->shade.drdx & ~0x1f, decoded->shade.dgdx & ~0x1f,
                             decoded->shade.dbdx & ~0x1f, decoded->shade.dadx & ~0x1f };
     const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
     for (uint32_t lane = 0; lane < count; lane++) {
         block->x[lane] = cursor->x_begin + (int)lane;
+        block->color_address[lane] = first_color_address + lane * primitive->framebuffer.bytes_per_pixel;
         block->depth_fixed[lane] = cursor->depth_fixed + (int64_t)lane * decoded->depth.dzdx;
         block->s[lane] = (int32_t)((uint32_t)cursor->s_fixed + lane * (uint32_t)decoded->texture.dsdx);
         block->t[lane] = (int32_t)((uint32_t)cursor->t_fixed + lane * (uint32_t)decoded->texture.dtdx);
         block->w[lane] = (int32_t)((uint32_t)cursor->w_fixed + lane * (uint32_t)decoded->texture.dwdx);
         for (uint32_t component = 0; component < 4u; component++) {
-            block->shade[component][lane] = (int32_t)((uint32_t)base[component] + lane * (uint32_t)dr[component]);
-            block->combiner.shade[component][lane] = shade_component_to_u8(block->shade[component][lane]);
+            const int32_t interpolated = (int32_t)((uint32_t)base[component] + lane * (uint32_t)dr[component]);
+            block->shade[component][lane] = shade_component_to_u8(interpolated);
         }
-        block->combiner.lod_fraction[lane] = 0u;
+        block->lod_fraction[lane] = 0u;
     }
     if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
     if (decoded->has_texture && primitive->color.needs_texel0) {
@@ -192,7 +182,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     const int total = work->x_end - work->x_begin + 1;
 
     for (int offset = 0; offset < total; offset += (int)RDP_PACKET_LANES) {
-        pipeline_triangle_block block;
+        rdp_fragment_block block;
         const uint32_t count = (uint32_t)(total - offset) < RDP_PACKET_LANES
             ? (uint32_t)(total - offset) : RDP_PACKET_LANES;
         setup_triangle_block(primitive, &cursor, count, &block);
@@ -211,10 +201,18 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 .y = work->y,
                 .depth_fixed = block.depth_fixed[lane]
             };
+            rdp_depth_result depth;
+            const uint32_t depth_address = primitive->fragment.depth.image_address +
+                ((uint32_t)work->y * primitive->framebuffer.color_image.width + block.x[0]) * 2u + lane * 2u;
             const sr_result result = scalar_depth_test(memory, primitive,
-                &lane_work, block.x[lane], &block.depth[lane]);
+                &lane_work, depth_address, &depth);
             if (result != SR_OK) return result;
-            if (!block.depth[lane].pass) block.live_mask &= (uint16_t)~(1u << lane);
+            if (!depth.pass) block.active_mask &= (uint16_t)~(1u << lane);
+            if (depth.update) {
+                block.depth_update_mask |= (uint16_t)(1u << lane);
+                block.depth_address[lane] = depth.address;
+                block.depth_value[lane] = depth.compressed;
+            }
         }
 
         if (decoded->has_texture && color_pipeline->needs_texel0) {
@@ -229,45 +227,41 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             }
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
-                if (!(block.live_mask & bit)) continue;
+                if (!(block.active_mask & bit)) continue;
                 const int32_t s = block.sample_s[lane];
                 const int32_t t = block.sample_t[lane];
                 rdp_color texel;
                 if (tmem_sample_color_fixed5(tmem, texture, s, t, &texel)) {
-                    block.combiner.texel0[0][lane] = texel.r;
-                    block.combiner.texel0[1][lane] = texel.g;
-                    block.combiner.texel0[2][lane] = texel.b;
-                    block.combiner.texel0[3][lane] = texel.a;
+                    block.texel0[0][lane] = texel.r;
+                    block.texel0[1][lane] = texel.g;
+                    block.texel0[2][lane] = texel.b;
+                    block.texel0[3][lane] = texel.a;
                     for (uint32_t component = 0; component < 4u; component++)
-                        block.combiner.texel1[component][lane] = block.combiner.texel0[component][lane];
+                        block.texel1[component][lane] = block.texel0[component][lane];
                 } else if (decoded->has_shade) {
                     block.fallback_mask |= bit;
                 } else {
-                    block.live_mask &= (uint16_t)~bit;
+                    block.active_mask &= (uint16_t)~bit;
                 }
             }
         }
 
-        rdp_combiner_evaluate_packet(color_pipeline, &block.combiner);
-        rdp_fragment_packet fragments = {
-            .count = count,
-            .active_mask = block.live_mask
-        };
+        rdp_combiner_evaluate_packet(color_pipeline, &block);
         for (uint32_t lane = 0; lane < count; lane++) {
             const uint16_t bit = (uint16_t)(1u << lane);
-            fragments.x[lane] = (uint32_t)block.x[lane];
-            fragments.y[lane] = (uint32_t)work->y;
-            fragments.shade_alpha[lane] = block.combiner.shade[3][lane];
             for (uint32_t component = 0; component < 4u; component++)
-                fragments.color[component][lane] = block.fallback_mask & bit
-                    ? block.combiner.shade[component][lane]
-                    : block.combiner.output[component][lane];
+                if (block.fallback_mask & bit)
+                    block.color[component][lane] = block.shade[component][lane];
         }
-        sr_result result = fragment_finish_packet(memory, primitive, &fragments);
+        sr_result result = fragment_finish_packet(memory, primitive, &block);
         if (result != SR_OK) return result;
         for (uint32_t lane = 0; lane < count; lane++) {
-            result = commit_depth_update(memory, &block.depth[lane],
-                (fragments.accepted_mask & (uint16_t)(1u << lane)) != 0u);
+            const rdp_depth_result depth = {
+                .update = (block.depth_update_mask & (uint16_t)(1u << lane)) != 0u,
+                .address = block.depth_address[lane], .compressed = block.depth_value[lane]
+            };
+            result = commit_depth_update(memory, &depth,
+                (block.accepted_mask & (uint16_t)(1u << lane)) != 0u);
             if (result != SR_OK) return result;
         }
     }
@@ -289,7 +283,7 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
     for (uint32_t offset = 0; offset < total; offset += RDP_PACKET_LANES) {
         const uint32_t count = total - offset < RDP_PACKET_LANES
             ? total - offset : RDP_PACKET_LANES;
-        rdp_combiner_packet packet;
+        rdp_fragment_block packet;
         packet.count = count;
         uint16_t live_mask = count == RDP_PACKET_LANES ? 0xffffu
             : (uint16_t)((1u << count) - 1u);
@@ -315,17 +309,17 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
             }
         }
         rdp_combiner_evaluate_packet(color, &packet);
-        rdp_fragment_packet fragments = {
-            .count = count,
-            .active_mask = live_mask
-        };
+        packet.active_mask = live_mask;
+        packet.y = (uint32_t)work->y;
+        const uint32_t first_pixel = (uint32_t)work->y * primitive->framebuffer.color_image.width +
+                                     (uint32_t)work->x_begin + offset;
+        const uint32_t first_address = primitive->framebuffer.color_image.address +
+                                       first_pixel * primitive->framebuffer.bytes_per_pixel;
         for (uint32_t lane = 0; lane < count; lane++) {
-            fragments.x[lane] = (uint32_t)work->x_begin + offset + lane;
-            fragments.y[lane] = (uint32_t)work->y;
-            for (uint32_t component = 0; component < 4u; component++)
-                fragments.color[component][lane] = packet.output[component][lane];
+            packet.x[lane] = (uint32_t)work->x_begin + offset + lane;
+            packet.color_address[lane] = first_address + lane * primitive->framebuffer.bytes_per_pixel;
         }
-        const sr_result result = fragment_finish_packet(memory, primitive, &fragments);
+        const sr_result result = fragment_finish_packet(memory, primitive, &packet);
         if (result != SR_OK) return result;
     }
 

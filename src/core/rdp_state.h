@@ -177,6 +177,7 @@ typedef struct rdp_state {
 typedef struct rdp_framebuffer_state {
     rdp_image color_image;
     uint32_t fill_color;
+    uint8_t bytes_per_pixel;
 } rdp_framebuffer_state;
 
 typedef struct rdp_texture_sample_state {
@@ -212,6 +213,7 @@ typedef struct rdp_color_pipeline_state {
     rdp_color primitive_color;
     rdp_color environment_color;
     rdp_cycle_type cycle_type;
+    bool two_cycle;
     uint8_t primitive_lod_fraction;
     bool needs_texel0;
     bool needs_texel1;
@@ -228,6 +230,8 @@ typedef struct rdp_blend_state {
     bool force_blend;
     bool image_read;
     bool alpha_compare;
+    uint8_t cycle_count;
+    uint8_t final_cycle;
 } rdp_blend_state;
 
 typedef struct rdp_fragment_state {

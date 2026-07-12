@@ -83,11 +83,10 @@ rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
                                bool blend_enable)
 {
     if (!s) return pixel;
-    const rdp_blender_cycle *final = s->cycle_type == RDP_CYCLE_2
-        ? &s->program.cycle[1] : &s->program.cycle[0];
+    const rdp_blender_cycle *final = &s->program.cycle[s->final_cycle];
     if (!blend_enable)
         return color_source(final->color_a, s, pixel, memory);
-    if (s->cycle_type == RDP_CYCLE_2) {
+    if (s->cycle_count == 2u) {
         pixel = evaluate_cycle(s, &s->program.cycle[0], pixel, pixel_alpha,
                                memory, shade_alpha, false);
         return evaluate_cycle(s, &s->program.cycle[1], pixel, pixel_alpha,
