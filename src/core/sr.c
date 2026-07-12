@@ -26,6 +26,13 @@ struct sr_context {
     bool vi_plan_prepared;
     rdp_metrics metrics;
     sr_debug_stats debug;
+
+    /* Stateful command reader */
+    uint32_t cmd_words[SR_MAX_COMMAND_WORDS];
+    uint32_t cmd_word_count;
+    uint32_t cmd_words_loaded;
+    uint32_t cmd_current_address;
+    uint8_t cmd_id;
 };
 
 #define SR_STATE_SNAPSHOT_MAGIC 0x31535253u /* "SRS1" */
@@ -268,36 +275,61 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
     }
 
     while (current < end) {
-        rdp_command cmd;
-        uint32_t first_word = 0;
-        uint32_t current_word = current >> 2;
-
-        if (!read_command_word(ctx, xbus_dma, current_word, &first_word)) {
-            ctx->debug.last_command_address = current;
-            ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-            finish_rdp_list(ctx, end, false);
-            return SR_ERROR_BAD_COMMAND;
-        }
-
-        cmd.id = (rdp_command_id)((first_word >> 24) & 0x3fu);
-        ctx->debug.last_command_address = current;
-        ctx->debug.last_command_id = (uint32_t)cmd.id;
-        cmd.word_count = rdp_command_word_count(cmd.id);
-        if (cmd.word_count == 0 || cmd.word_count > SR_MAX_COMMAND_WORDS) {
-            printf("  DEBUG: Bad command! id=0x%02x, word_count=%u, offset=%u\n",
-                   (uint32_t)cmd.id, cmd.word_count, current - ctx->debug.last_list_current);
-            ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-            finish_rdp_list(ctx, end, false);
-            return SR_ERROR_BAD_COMMAND;
-        }
-
-        for (uint8_t i = 0; i < cmd.word_count; i++) {
-            if (!read_command_word(ctx, xbus_dma, current_word + i, &cmd.words[i])) {
+        if (ctx->cmd_words_loaded == 0) {
+            uint32_t first_word = 0;
+            if (!read_command_word(ctx, xbus_dma, current >> 2, &first_word)) {
+                ctx->debug.last_command_address = current;
                 ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
                 finish_rdp_list(ctx, end, false);
                 return SR_ERROR_BAD_COMMAND;
             }
+
+            ctx->cmd_id = (uint8_t)((first_word >> 24) & 0x3fu);
+            ctx->cmd_word_count = rdp_command_word_count((rdp_command_id)ctx->cmd_id);
+            if (ctx->cmd_word_count == 0 || ctx->cmd_word_count > SR_MAX_COMMAND_WORDS) {
+                printf("  DEBUG: Bad command! id=0x%02x, word_count=%u, offset=%u\n",
+                       (uint32_t)ctx->cmd_id, ctx->cmd_word_count, current - ctx->debug.last_list_current);
+                ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
+                finish_rdp_list(ctx, end, false);
+                return SR_ERROR_BAD_COMMAND;
+            }
+
+            ctx->cmd_words[0] = first_word;
+            ctx->cmd_words_loaded = 1;
+            ctx->cmd_current_address = current;
+
+            ctx->debug.last_command_address = ctx->cmd_current_address;
+            ctx->debug.last_command_id = (uint32_t)ctx->cmd_id;
+
+            current += 4u;
         }
+
+        while (ctx->cmd_words_loaded < ctx->cmd_word_count) {
+            if (current >= end) {
+                /* Command is truncated in this list. Stop and wait for the next list. */
+                finish_rdp_list(ctx, current, false);
+                return SR_OK;
+            }
+
+            uint32_t word = 0;
+            if (!read_command_word(ctx, xbus_dma, current >> 2, &word)) {
+                ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
+                finish_rdp_list(ctx, end, false);
+                return SR_ERROR_BAD_COMMAND;
+            }
+
+            ctx->cmd_words[ctx->cmd_words_loaded++] = word;
+            current += 4u;
+        }
+
+        /* We have a complete command! Execute it. */
+        rdp_command cmd;
+        cmd.id = (rdp_command_id)ctx->cmd_id;
+        cmd.word_count = (uint8_t)ctx->cmd_word_count;
+        memcpy(cmd.words, ctx->cmd_words, ctx->cmd_word_count * sizeof(uint32_t));
+
+        /* Reset stateful reader for next command */
+        ctx->cmd_words_loaded = 0;
 
         sr_result result = rdp_decode_command(&cmd);
         if (result == SR_OK) {
@@ -310,16 +342,16 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
             finish_rdp_list(ctx, end, false);
             return result;
         }
+
         if (cmd.id == RDP_CMD_SYNC_FULL) {
             full_sync_seen = true;
         }
+
         ctx->debug.color_image_format = (uint32_t)ctx->rdp.color_image.format;
         ctx->debug.color_image_size = (uint32_t)ctx->rdp.color_image.size;
         ctx->debug.color_image_width = ctx->rdp.color_image.width;
         ctx->debug.color_image_address = ctx->rdp.color_image.address;
         capture_texture_debug(&ctx->debug, &ctx->rdp, &cmd);
-
-        current += (uint32_t)cmd.word_count * 4u;
     }
 
     finish_rdp_list(ctx, end, full_sync_seen);
