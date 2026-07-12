@@ -359,25 +359,25 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
         }
 
         rdp_combiner_evaluate_packet(color_pipeline, &block.combiner);
+        rdp_fragment_packet fragments = {
+            .count = count,
+            .active_mask = block.live_mask
+        };
         for (uint32_t lane = 0; lane < count; lane++) {
-            bool accepted = false;
             const uint16_t bit = (uint16_t)(1u << lane);
-            if (block.live_mask & bit) {
-                const rdp_color color = block.fallback_mask & bit
-                    ? (rdp_color){ (uint8_t)block.combiner.shade[0][lane],
-                                   (uint8_t)block.combiner.shade[1][lane],
-                                   (uint8_t)block.combiner.shade[2][lane],
-                                   (uint8_t)block.combiner.shade[3][lane] }
-                    : (rdp_color){ (uint8_t)block.combiner.output[0][lane],
-                                   (uint8_t)block.combiner.output[1][lane],
-                                   (uint8_t)block.combiner.output[2][lane],
-                                   (uint8_t)block.combiner.output[3][lane] };
-                const sr_result result = fragment_finish(memory, primitive,
-                    (uint32_t)block.x[lane], (uint32_t)work->y, color,
-                    (uint8_t)block.combiner.shade[3][lane], &accepted);
-                if (result != SR_OK) return result;
-            }
-            const sr_result result = commit_depth_update(memory, &block.depth[lane], accepted);
+            fragments.x[lane] = (uint32_t)block.x[lane];
+            fragments.y[lane] = (uint32_t)work->y;
+            fragments.shade_alpha[lane] = block.combiner.shade[3][lane];
+            for (uint32_t component = 0; component < 4u; component++)
+                fragments.color[component][lane] = block.fallback_mask & bit
+                    ? block.combiner.shade[component][lane]
+                    : block.combiner.output[component][lane];
+        }
+        sr_result result = fragment_finish_packet(memory, primitive, &fragments);
+        if (result != SR_OK) return result;
+        for (uint32_t lane = 0; lane < count; lane++) {
+            result = commit_depth_update(memory, &block.depth[lane],
+                (fragments.accepted_mask & (uint16_t)(1u << lane)) != 0u);
             if (result != SR_OK) return result;
         }
     }
@@ -424,17 +424,18 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
             }
         }
         rdp_combiner_evaluate_packet(color, &packet);
+        rdp_fragment_packet fragments = {
+            .count = count,
+            .active_mask = live_mask
+        };
         for (uint32_t lane = 0; lane < count; lane++) {
-            if (!(live_mask & (uint16_t)(1u << lane))) continue;
-            const rdp_color output = {
-                (uint8_t)packet.output[0][lane], (uint8_t)packet.output[1][lane],
-                (uint8_t)packet.output[2][lane], (uint8_t)packet.output[3][lane]
-            };
-            const sr_result result = fragment_finish(memory, primitive,
-                (uint32_t)work->x_begin + offset + lane, (uint32_t)work->y,
-                output, 0u, NULL);
-            if (result != SR_OK) return result;
+            fragments.x[lane] = (uint32_t)work->x_begin + offset + lane;
+            fragments.y[lane] = (uint32_t)work->y;
+            for (uint32_t component = 0; component < 4u; component++)
+                fragments.color[component][lane] = packet.output[component][lane];
         }
+        const sr_result result = fragment_finish_packet(memory, primitive, &fragments);
+        if (result != SR_OK) return result;
     }
 
     return SR_OK;
