@@ -385,55 +385,6 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     return SR_OK;
 }
 
-static sr_result render_rectangle_pixel(sr_memory *memory,
-                                        const rdp_primitive_state *primitive,
-                                        int32_t s_fixed,
-                                        int32_t t_fixed,
-                                        uint32_t x,
-                                        uint32_t y)
-{
-    const tmem_state *tmem = primitive->tmem;
-    const rdp_texture_sample_state *texture = &primitive->texture;
-    const rdp_color_pipeline_state *color_pipeline = &primitive->color;
-    rdp_metrics *metrics = primitive->metrics;
-    if (!color_pipeline->needs_texel0 && !color_pipeline->needs_texel1) {
-        const pipeline_inputs inputs = {
-            .primitive = color_pipeline->primitive_color,
-            .environment = color_pipeline->environment_color,
-            .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
-        };
-        return fragment_finish(memory, primitive, x, y,
-                                       pipeline_combine_pixel(color_pipeline, &inputs).color, 0u, NULL);
-    }
-
-    rdp_color texel0;
-    if (metrics) {
-        metrics->rect_texture_sample_attempts++;
-    }
-    if (!tmem_sample_color_fixed5(tmem, texture, s_fixed, t_fixed, &texel0)) {
-        if (metrics) {
-            metrics->rect_texture_sample_misses++;
-        }
-        /* A texture lookup miss is a rejected fragment, not a malformed RDP
-         * command.  Aborting here used to discard the rest of the display
-         * list when a rectangle touched an unsupported/empty TMEM texel. */
-        return SR_OK;
-    }
-    if (metrics) {
-        metrics->rect_texture_sample_hits++;
-    }
-
-    pipeline_inputs inputs = {
-        .texel0 = texel0,
-        .texel1 = texel0,
-        .primitive = color_pipeline->primitive_color,
-        .environment = color_pipeline->environment_color,
-        .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
-    };
-    pipeline_outputs outputs = pipeline_combine_pixel(color_pipeline, &inputs);
-    return fragment_finish(memory, primitive, x, y, outputs.color, 0u, NULL);
-}
-
 sr_result pipeline_render_rectangle_span(sr_memory *memory,
                                          const rdp_primitive_state *primitive,
                                          const rdp_span_work *work)
@@ -442,20 +393,48 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
         return SR_ERROR_INVALID_ARGUMENT;
     }
 
-    int32_t s_fixed = work->s_fixed;
-    int32_t t_fixed = work->t_fixed;
-    for (int x = work->x_begin; x <= work->x_end; x++) {
-        sr_result result = render_rectangle_pixel(memory,
-                                                  primitive,
-                                                  s_fixed,
-                                                  t_fixed,
-                                                  (uint32_t)x,
-                                                  (uint32_t)work->y);
-        if (result != SR_OK) {
-            return result;
+    const rdp_color_pipeline_state *color = &primitive->color;
+    const bool needs_texture = color->needs_texel0 || color->needs_texel1;
+    const uint32_t total = (uint32_t)(work->x_end - work->x_begin + 1);
+    for (uint32_t offset = 0; offset < total; offset += RDP_PACKET_LANES) {
+        const uint32_t count = total - offset < RDP_PACKET_LANES
+            ? total - offset : RDP_PACKET_LANES;
+        rdp_combiner_packet packet = { .count = count };
+        uint16_t live_mask = count == RDP_PACKET_LANES ? 0xffffu
+            : (uint16_t)((1u << count) - 1u);
+        if (needs_texture) {
+            for (uint32_t lane = 0; lane < count; lane++) {
+                const int32_t s = (int32_t)((uint32_t)work->s_fixed +
+                    (offset + lane) * (uint32_t)work->dsdx_fixed);
+                const int32_t t = (int32_t)((uint32_t)work->t_fixed +
+                    (offset + lane) * (uint32_t)work->dtdx_fixed);
+                rdp_color texel;
+                if (primitive->metrics) primitive->metrics->rect_texture_sample_attempts++;
+                if (!tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
+                                              s, t, &texel)) {
+                    live_mask &= (uint16_t)~(1u << lane);
+                    if (primitive->metrics) primitive->metrics->rect_texture_sample_misses++;
+                    continue;
+                }
+                if (primitive->metrics) primitive->metrics->rect_texture_sample_hits++;
+                packet.texel0[0][lane] = packet.texel1[0][lane] = texel.r;
+                packet.texel0[1][lane] = packet.texel1[1][lane] = texel.g;
+                packet.texel0[2][lane] = packet.texel1[2][lane] = texel.b;
+                packet.texel0[3][lane] = packet.texel1[3][lane] = texel.a;
+            }
         }
-        s_fixed += work->dsdx_fixed;
-        t_fixed += work->dtdx_fixed;
+        rdp_combiner_evaluate_packet(color, &packet);
+        for (uint32_t lane = 0; lane < count; lane++) {
+            if (!(live_mask & (uint16_t)(1u << lane))) continue;
+            const rdp_color output = {
+                (uint8_t)packet.output[0][lane], (uint8_t)packet.output[1][lane],
+                (uint8_t)packet.output[2][lane], (uint8_t)packet.output[3][lane]
+            };
+            const sr_result result = fragment_finish(memory, primitive,
+                (uint32_t)work->x_begin + offset + lane, (uint32_t)work->y,
+                output, 0u, NULL);
+            if (result != SR_OK) return result;
+        }
     }
 
     return SR_OK;

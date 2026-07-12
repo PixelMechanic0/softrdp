@@ -56,12 +56,23 @@ static rdp_color evaluate_cycle(const rdp_blend_state *s,
     const uint16_t raw_a = factor_a(c->factor_a, s, pixel_alpha, shade_alpha);
     const uint32_t a = raw_a >> 3;
     const uint32_t b = (factor_b(c->factor_b, raw_a, memory) >> 3) + 1u;
-    const uint32_t divisor = (!final_cycle || s->force_blend) ? 32u : a + b;
+    const uint32_t red = (uint32_t)x.r * a + (uint32_t)y.r * b;
+    const uint32_t green = (uint32_t)x.g * a + (uint32_t)y.g * b;
+    const uint32_t blue = (uint32_t)x.b * a + (uint32_t)y.b * b;
+    if (!final_cycle || s->force_blend) {
+        return (rdp_color){
+            (uint8_t)(red >> 5),
+            (uint8_t)(green >> 5),
+            (uint8_t)(blue >> 5),
+            pixel.a
+        };
+    }
+    const uint32_t divisor = a + b;
     if (!divisor) return x;
     return (rdp_color){
-        (uint8_t)(((uint32_t)x.r * a + (uint32_t)y.r * b) / divisor),
-        (uint8_t)(((uint32_t)x.g * a + (uint32_t)y.g * b) / divisor),
-        (uint8_t)(((uint32_t)x.b * a + (uint32_t)y.b * b) / divisor),
+        (uint8_t)(red / divisor),
+        (uint8_t)(green / divisor),
+        (uint8_t)(blue / divisor),
         pixel.a
     };
 }

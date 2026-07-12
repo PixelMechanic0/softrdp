@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #define PJ64_MAX_FRAME_WIDTH 800u
 #define PJ64_MAX_FRAME_HEIGHT 600u
@@ -36,6 +37,19 @@ static uint32_t g_last_logged_fragment_color_xor;
 static bool g_dump_requested = false;
 static bool g_record_active = false;
 static FILE* g_frame_dump_file = NULL;
+
+static bool dump_write_all(FILE *file, const void *data, size_t size)
+{
+    const uint8_t *cursor = (const uint8_t *)data;
+    while (size) {
+        const size_t chunk = size > 64u * 1024u ? 64u * 1024u : size;
+        const size_t written = fwrite(cursor, 1, chunk, file);
+        if (written != chunk) return false;
+        cursor += written;
+        size -= written;
+    }
+    return true;
+}
 static uint32_t g_recorded_lists_count = 0;
 static long g_list_count_offset = 0;
 
@@ -716,7 +730,13 @@ void PJ64_CALL ProcessRDPList(void)
                 free(state);
                 
                 // Write initial RDRAM
-                if (g_frame_dump_file) fwrite(g_gfx.RDRAM, 1, SR_RDRAM_MAX_SIZE, g_frame_dump_file);
+                if (g_frame_dump_file &&
+                    !dump_write_all(g_frame_dump_file, g_gfx.RDRAM, SR_RDRAM_MAX_SIZE)) {
+                    pj64_log_printf("ERROR: Could not write initial RDRAM to frame dump (errno=%d)", errno);
+                    fclose(g_frame_dump_file);
+                    g_frame_dump_file = NULL;
+                    g_record_active = false;
+                }
                 
                 pj64_log_printf("Starting frame dump recording (triggered by list)...");
             } else {
@@ -866,15 +886,20 @@ void PJ64_CALL UpdateScreen(void)
         g_record_active = false;
         if (g_frame_dump_file) {
             // Write final reference RDRAM output
-            fwrite(g_gfx.RDRAM, 1, SR_RDRAM_MAX_SIZE, g_frame_dump_file);
-            
-            // Update list count in header
-            fseek(g_frame_dump_file, g_list_count_offset, SEEK_SET);
-            fwrite(&g_recorded_lists_count, 4, 1, g_frame_dump_file);
-            
-            fclose(g_frame_dump_file);
+            const bool wrote_rdram = dump_write_all(g_frame_dump_file, g_gfx.RDRAM,
+                                                     SR_RDRAM_MAX_SIZE);
+            const bool sought_header = wrote_rdram &&
+                                       fseek(g_frame_dump_file, g_list_count_offset, SEEK_SET) == 0;
+            const bool wrote_count = sought_header &&
+                                     fwrite(&g_recorded_lists_count, 4, 1, g_frame_dump_file) == 1;
+            const bool closed = fclose(g_frame_dump_file) == 0;
             g_frame_dump_file = NULL;
-            pj64_log_printf("Frame dump completed successfully! Recorded %u lists.", g_recorded_lists_count);
+            if (wrote_rdram && wrote_count && closed)
+                pj64_log_printf("Frame dump completed successfully! Recorded %u lists.", g_recorded_lists_count);
+            else
+                pj64_log_printf("ERROR: Frame dump incomplete (rdram=%d header=%d close=%d errno=%d)",
+                                  wrote_rdram ? 1 : 0, wrote_count ? 1 : 0,
+                                  closed ? 1 : 0, errno);
         }
     }
 
