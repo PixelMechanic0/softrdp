@@ -109,6 +109,12 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
         primitive->texture.height = (uint16_t)texture_height;
         primitive->texture.stride = (uint16_t)texture_stride;
     }
+    if (primitive->texture.tile.format == RDP_FORMAT_RGBA &&
+        primitive->texture.tile.size == RDP_SIZE_16BPP &&
+        !primitive->texture.tlut_enable) {
+        primitive->texture.sampler_class = primitive->texture.bilerp && primitive->texture.sample_quad
+            ? 2u : 1u;
+    }
 }
 
 void pipeline_compile_triangle(rdp_primitive_state *primitive,

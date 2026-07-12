@@ -187,6 +187,7 @@ typedef struct rdp_texture_sample_state {
     uint16_t height;
     uint16_t stride;
     uint8_t tile_index;
+    uint8_t sampler_class;
     bool perspective;
     bool tlut_enable;
     bool tlut_ia;
