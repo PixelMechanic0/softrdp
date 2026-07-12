@@ -2,7 +2,6 @@
 #define RDP_COMMANDS_H
 
 #include "rdp_state.h"
-#include "rdp_metrics.h"
 
 typedef struct sr_memory sr_memory;
 typedef struct tmem_state tmem_state;
@@ -174,7 +173,6 @@ sr_result rdp_decode_command(rdp_command *cmd);
 sr_result rdp_execute_command(sr_memory *memory,
                               tmem_state *tmem,
                               rdp_state *state,
-                              rdp_metrics *metrics,
                               const rdp_command *cmd);
 
 #endif

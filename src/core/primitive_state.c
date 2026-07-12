@@ -44,7 +44,6 @@ void pipeline_compile_framebuffer(rdp_framebuffer_state *framebuffer,
 static void pipeline_compile_common(rdp_primitive_state *primitive,
                                     const rdp_state *registers,
                                     const tmem_state *tmem,
-                                    rdp_metrics *metrics,
                                     uint32_t tile_index)
 {
     memset(primitive, 0, sizeof(*primitive));
@@ -89,7 +88,6 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.antialias = registers->other_modes.antialias;
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
     primitive->tmem = tmem;
-    primitive->metrics = metrics;
     pipeline_resolve_tile_bounds(registers,
                                  tmem,
                                  primitive->texture.tile_index,
@@ -111,7 +109,6 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
 void pipeline_compile_triangle(rdp_primitive_state *primitive,
                                const rdp_state *registers,
                                const tmem_state *tmem,
-                               rdp_metrics *metrics,
                                const raster_decoded_triangle *triangle,
                                bool fill_mode)
 {
@@ -122,7 +119,6 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
     pipeline_compile_common(primitive,
                             registers,
                             tmem,
-                            metrics,
                             triangle->position.tile);
     primitive->triangle = *triangle;
     primitive->fill_mode = fill_mode;
@@ -132,14 +128,13 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
 void pipeline_compile_rectangle(rdp_primitive_state *primitive,
                                 const rdp_state *registers,
                                 const tmem_state *tmem,
-                                rdp_metrics *metrics,
                                 uint32_t tile_index)
 {
     if (!primitive || !registers) {
         return;
     }
 
-    pipeline_compile_common(primitive, registers, tmem, metrics, tile_index);
+    pipeline_compile_common(primitive, registers, tmem, tile_index);
     primitive->span_kernel = registers->other_modes.cycle_type == RDP_CYCLE_COPY
         ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
         : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;

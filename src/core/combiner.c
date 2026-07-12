@@ -356,7 +356,7 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
     if (!state || !packet) return;
     
     uint32_t count = packet->count;
-    uint32_t chunks = (count + 7u) >> 3;
+    uint32_t chunks = count >> 3;
     uint16_t combined[4][RDP_PACKET_LANES] = {{0}};
     
     for (uint32_t chunk = 0; chunk < chunks; chunk++) {
@@ -385,5 +385,31 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
             __m256i clamped = simd_clamp_9(simd_combined[component]);
             store_pack_8(&packet->output[component][offset], clamped);
         }
+    }
+
+    /* A scalar tail avoids reading uninitialized lanes and lets callers build
+     * only the live packet data instead of clearing the complete packet. */
+    for (uint32_t lane = chunks << 3; lane < count; lane++) {
+        const rdp_combiner_inputs inputs = {
+            .shade = { (uint8_t)packet->shade[0][lane], (uint8_t)packet->shade[1][lane],
+                       (uint8_t)packet->shade[2][lane], (uint8_t)packet->shade[3][lane] },
+            .texel0 = { (uint8_t)packet->texel0[0][lane], (uint8_t)packet->texel0[1][lane],
+                        (uint8_t)packet->texel0[2][lane], (uint8_t)packet->texel0[3][lane] },
+            .texel1 = { (uint8_t)packet->texel1[0][lane], (uint8_t)packet->texel1[1][lane],
+                        (uint8_t)packet->texel1[2][lane], (uint8_t)packet->texel1[3][lane] },
+            .primitive = state->primitive_color,
+            .environment = state->environment_color,
+            .lod_fraction = (uint8_t)packet->lod_fraction[lane],
+            .primitive_lod_fraction = state->primitive_lod_fraction,
+            .k4 = (uint16_t)state->convert_k4,
+            .k5 = (uint16_t)state->convert_k5
+        };
+        const rdp_color output = rdp_combiner_evaluate(&state->program,
+                                                       state->cycle_type,
+                                                       &inputs);
+        packet->output[0][lane] = output.r;
+        packet->output[1][lane] = output.g;
+        packet->output[2][lane] = output.b;
+        packet->output[3][lane] = output.a;
     }
 }

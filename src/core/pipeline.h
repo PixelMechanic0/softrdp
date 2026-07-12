@@ -2,7 +2,6 @@
 #define PIPELINE_H
 
 #include "rdp_commands.h"
-#include "rdp_metrics.h"
 #include "combiner.h"
 
 typedef rdp_combiner_inputs pipeline_inputs;
@@ -52,7 +51,6 @@ struct rdp_primitive_state {
     rdp_color_pipeline_state color;
     rdp_fragment_state fragment;
     const tmem_state *tmem;
-    rdp_metrics *metrics;
     raster_decoded_triangle triangle;
     rdp_span_kernel_kind span_kernel;
     bool fill_mode;
@@ -66,7 +64,6 @@ void pipeline_compile_framebuffer(rdp_framebuffer_state *framebuffer,
 void pipeline_compile_triangle(rdp_primitive_state *primitive,
                                const rdp_state *registers,
                                const tmem_state *tmem,
-                               rdp_metrics *metrics,
                                const raster_decoded_triangle *triangle,
                                bool fill_mode);
 
@@ -83,7 +80,6 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
 void pipeline_compile_rectangle(rdp_primitive_state *primitive,
                                 const rdp_state *registers,
                                 const tmem_state *tmem,
-                                rdp_metrics *metrics,
                                 uint32_t tile_index);
 
 void pipeline_setup_rectangle_span(int x_begin,

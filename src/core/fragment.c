@@ -11,7 +11,6 @@ sr_result fragment_finish_packet(sr_memory *memory,
         return SR_ERROR_INVALID_ARGUMENT;
 
     const rdp_fragment_state *state = &primitive->fragment;
-    rdp_metrics *metrics = primitive->metrics;
     uint16_t active = packet->active_mask;
     uint16_t alpha[RDP_PACKET_LANES];
     uint8_t coverage[RDP_PACKET_LANES];
@@ -27,7 +26,6 @@ sr_result fragment_finish_packet(sr_memory *memory,
         coverage[lane] = 8u;
         alpha[lane] = packet->color[3][lane];
         if (!(active & bit)) continue;
-        if (metrics) metrics->fragment_attempts++;
         if (state->cvg_times_alpha) {
             alpha[lane] = (uint16_t)(((uint32_t)alpha[lane] * coverage[lane] + 4u) >> 3);
             coverage[lane] = (uint8_t)((alpha[lane] >> 5) & 0xfu);
@@ -36,7 +34,6 @@ sr_result fragment_finish_packet(sr_memory *memory,
             alpha[lane] = (uint16_t)coverage[lane] << 5;
         if (state->blend.alpha_compare && alpha[lane] < state->blend.blend_color.a) {
             active &= (uint16_t)~bit;
-            if (metrics) metrics->fragment_alpha_rejects++;
         }
     }
 
@@ -89,20 +86,6 @@ sr_result fragment_finish_packet(sr_memory *memory,
         const sr_result result = framebuffer_write_color(memory, &primitive->framebuffer,
             packet->x[lane], packet->y[lane], pixel[lane]);
         if (result != SR_OK) return result;
-        if (metrics) {
-            const uint32_t bpp = primitive->framebuffer.color_image.size == RDP_SIZE_32BPP ? 4u :
-                                 primitive->framebuffer.color_image.size == RDP_SIZE_16BPP ? 2u : 1u;
-            const uint32_t address = primitive->framebuffer.color_image.address +
-                (packet->y[lane] * primitive->framebuffer.color_image.width + packet->x[lane]) * bpp;
-            if (metrics->fragment_writes == 0 || address < metrics->fragment_min_address)
-                metrics->fragment_min_address = address;
-            if (metrics->fragment_writes == 0 || address > metrics->fragment_max_address)
-                metrics->fragment_max_address = address;
-            metrics->fragment_color_xor ^= ((uint32_t)pixel[lane].r << 24) |
-                                           ((uint32_t)pixel[lane].g << 16) |
-                                           ((uint32_t)pixel[lane].b << 8) | pixel[lane].a;
-            metrics->fragment_writes++;
-        }
     }
     return SR_OK;
 }

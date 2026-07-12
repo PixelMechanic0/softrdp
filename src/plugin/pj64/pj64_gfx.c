@@ -27,12 +27,6 @@ static uint32_t g_process_dlist_calls;
 static uint32_t g_process_rdp_calls;
 static uint32_t g_update_screen_calls;
 static uint32_t g_uploaded_frames;
-static uint64_t g_last_logged_commands;
-static uint64_t g_last_logged_draws;
-static uint64_t g_last_logged_fragment_attempts;
-static uint64_t g_last_logged_fragment_alpha_rejects;
-static uint64_t g_last_logged_fragment_writes;
-static uint32_t g_last_logged_fragment_color_xor;
 
 static bool g_dump_requested = false;
 static bool g_record_active = false;
@@ -225,6 +219,7 @@ static void release_frame_storage(void)
     g_frame_capacity_pixels = 0;
 }
 
+#if SOFTRDP_ENABLE_LOG
 static const char *result_name(sr_result result)
 {
     switch (result) {
@@ -240,6 +235,7 @@ static const char *result_name(sr_result result)
         return "UNKNOWN";
     }
 }
+#endif
 
 static bool command_has_texture_debug(uint32_t command_id)
 {
@@ -628,12 +624,6 @@ static void stop_runtime(void)
     g_process_dlist_calls = 0;
     g_update_screen_calls = 0;
     g_uploaded_frames = 0;
-    g_last_logged_commands = 0;
-    g_last_logged_draws = 0;
-    g_last_logged_fragment_attempts = 0;
-    g_last_logged_fragment_alpha_rejects = 0;
-    g_last_logged_fragment_writes = 0;
-    g_last_logged_fragment_color_xor = 0;
 #if SOFTRDP_ENABLE_PERF_OVERLAY
     memset(&g_overlay, 0, sizeof(g_overlay));
 #endif
@@ -808,9 +798,8 @@ void PJ64_CALL ProcessRDPList(void)
         stats = sr_get_debug_stats(g_context);
         if (PJ64_LOG_ENABLED &&
             (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
-             (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)) ||
-             stats.draw_calls_seen != g_last_logged_draws)) {
-            pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s commands=%llu draws=%llu ci=%08x/%ux%u/%u",
+             (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)))) {
+            pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s ci=%08x/%ux%u/%u",
                               g_process_rdp_calls,
                               result_name(result),
                               stats.last_list_current,
@@ -819,8 +808,6 @@ void PJ64_CALL ProcessRDPList(void)
                               stats.last_command_address,
                               stats.last_command_id,
                               rdp_command_name((rdp_command_id)stats.last_command_id),
-                              (unsigned long long)stats.commands_seen,
-                              (unsigned long long)stats.draw_calls_seen,
                               stats.color_image_address,
                               stats.color_image_width,
                               stats.color_image_size,
@@ -830,17 +817,6 @@ void PJ64_CALL ProcessRDPList(void)
             } else if (command_has_texture_debug(stats.last_command_id)) {
                 log_texture_debug(&stats);
             }
-            pj64_log_printf("  fragment-debug attempts=%llu alpha-rejects=%llu writes=%llu color-xor=%08x",
-                              (unsigned long long)(stats.fragment_attempts - g_last_logged_fragment_attempts),
-                              (unsigned long long)(stats.fragment_alpha_rejects - g_last_logged_fragment_alpha_rejects),
-                              (unsigned long long)(stats.fragment_writes - g_last_logged_fragment_writes),
-                              stats.fragment_color_xor ^ g_last_logged_fragment_color_xor);
-            g_last_logged_commands = stats.commands_seen;
-            g_last_logged_draws = stats.draw_calls_seen;
-            g_last_logged_fragment_attempts = stats.fragment_attempts;
-            g_last_logged_fragment_alpha_rejects = stats.fragment_alpha_rejects;
-            g_last_logged_fragment_writes = stats.fragment_writes;
-            g_last_logged_fragment_color_xor = stats.fragment_color_xor;
         }
     } else {
         pj64_log_printf("RDP call=%u no context, acknowledging", g_process_rdp_calls);
@@ -881,8 +857,10 @@ void PJ64_CALL UpdateScreen(void)
     sr_framebuffer fb;
     sr_result result;
     bool uploaded = false;
+#if SOFTRDP_ENABLE_LOG
     uint32_t scanout_nonblack = 0;
     uint32_t scanout_xor = 0;
+#endif
 
     ensure_window_size(g_gfx.hWnd);
 
@@ -947,6 +925,7 @@ void PJ64_CALL UpdateScreen(void)
     QueryPerformanceCounter(&present_start);
 #endif
     if (result == SR_OK && fb.valid && vi_info.display) {
+#if SOFTRDP_ENABLE_LOG
         for (uint32_t y = 0; y < fb.height; y++) {
             const sr_rgba8 *row = fb.pixels + y * fb.stride_pixels;
             for (uint32_t x = 0; x < fb.width; x++) {
@@ -957,6 +936,7 @@ void PJ64_CALL UpdateScreen(void)
                 if (row[x].r || row[x].g || row[x].b) scanout_nonblack++;
             }
         }
+#endif
         uploaded = sr_present_upload_rgba8(&g_present, fb.pixels, fb.width, fb.height, fb.stride_pixels);
     } else {
         /* VI scanout is authoritative. Never expose raw RDRAM as a fallback;
@@ -983,6 +963,7 @@ void PJ64_CALL UpdateScreen(void)
         g_uploaded_frames++;
     }
 
+#if SOFTRDP_ENABLE_LOG
     if (PJ64_LOG_ENABLED &&
         (log_sample_u32(g_update_screen_calls, 32u, 600u) ||
          (!uploaded && log_sample_u32(g_update_screen_calls, 128u, 120u)))) {
@@ -1001,6 +982,7 @@ void PJ64_CALL UpdateScreen(void)
                           scanout_xor,
                           g_uploaded_frames);
     }
+#endif
 }
 
 void PJ64_CALL ViStatusChanged(void)

@@ -2,7 +2,6 @@
 #define TMEM_H
 
 #include "rdp_state.h"
-#include "rdp_metrics.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -29,7 +28,7 @@ typedef struct tmem_texel_address {
 } tmem_texel_address;
 
 void tmem_init(tmem_state *tmem);
-sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, rdp_metrics *metrics, const rdp_command *cmd);
+sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_command *cmd);
 
 static inline int32_t sign16_coord(int32_t value)
 {

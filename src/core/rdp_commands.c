@@ -245,15 +245,8 @@ sr_result rdp_decode_command(rdp_command *cmd)
 sr_result rdp_execute_command(sr_memory *memory,
                               tmem_state *tmem,
                               rdp_state *state,
-                              rdp_metrics *metrics,
                               const rdp_command *cmd)
 {
-    if (metrics) {
-        metrics->commands_seen++;
-        if (rdp_command_is_draw(cmd->id)) {
-            metrics->draw_calls_seen++;
-        }
-    }
 
     switch (cmd->id) {
     case RDP_CMD_NO_OP:
@@ -310,11 +303,11 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_SHADE_TRIANGLE:
     case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:
     case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
-    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_submit_triangle(memory, tmem, state, metrics, cmd);
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_submit_triangle(memory, tmem, state, cmd);
 
     case RDP_CMD_TEXTURE_RECTANGLE:
     case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
-    case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, metrics, cmd);
+    case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, cmd);
 
     case RDP_CMD_LOAD_BLOCK: {
         rdp_tile *tile = &state->tiles[cmd->decoded.load.tile_index];
@@ -322,11 +315,11 @@ sr_result rdp_execute_command(sr_memory *memory,
         tile->tl = cmd->decoded.load.tl;
         tile->sh = cmd->decoded.load.sh;
         tile->th = cmd->decoded.load.dxt;
-        return tmem_load_tile(tmem, memory, state, metrics, cmd);
+        return tmem_load_tile(tmem, memory, state, cmd);
     }
 
     case RDP_CMD_LOAD_TLUT:
-    case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, metrics, cmd);
+    case RDP_CMD_LOAD_TILE:                       return tmem_load_tile(tmem, memory, state, cmd);
 
     case RDP_CMD_SET_COMBINE:                    state->combiner = cmd->decoded.set_combine; return SR_OK;
 

@@ -5,10 +5,6 @@
 
 #include <stdint.h>
 
-#if SOFTRDP_ENABLE_PERF_METRICS
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 static int32_t sign_extend(uint32_t value, unsigned bits)
 {
@@ -247,7 +243,6 @@ static bool clip_rect_to_scissor(raster_rect *rect, const rdp_state *state)
 sr_result raster_submit_triangle(sr_memory *memory,
                                  tmem_state *tmem,
                                  const rdp_state *state,
-                                 rdp_metrics *metrics,
                                  const rdp_command *cmd)
 {
     if (!cmd) {
@@ -264,23 +259,10 @@ sr_result raster_submit_triangle(sr_memory *memory,
         return SR_OK;
     }
 
-#if SOFTRDP_ENABLE_PERF_METRICS
-    LARGE_INTEGER start, end;
-#if SOFTRDP_ENABLE_PERF_OVERLAY && !SOFTRDP_ENABLE_PERF_LOG
-    const bool measure_detail = metrics && metrics->detail_measure_enabled &&
-        ((metrics->triangle_count & 15u) == metrics->detail_sample_phase);
-#else
-    const bool measure_detail = metrics != NULL;
-#endif
-    if (metrics) metrics->triangle_count++;
-    if (measure_detail) QueryPerformanceCounter(&start);
-#endif
-
     rdp_primitive_state primitive;
     pipeline_compile_triangle(&primitive,
                               state,
                               tmem,
-                              metrics,
                               &decoded,
                               fill_triangle);
 
@@ -297,24 +279,9 @@ sr_result raster_submit_triangle(sr_memory *memory,
         pipeline_setup_triangle_span(&primitive, span.x0, span.x1, y, &work);
         result = pipeline_render_span(memory, &primitive, &work);
         if (result != SR_OK) {
-#if SOFTRDP_ENABLE_PERF_METRICS
-            if (measure_detail) {
-                QueryPerformanceCounter(&end);
-                metrics->triangle_ticks += (end.QuadPart - start.QuadPart);
-                metrics->triangle_sample_count++;
-            }
-#endif
             return result;
         }
     }
-
-#if SOFTRDP_ENABLE_PERF_METRICS
-    if (measure_detail) {
-        QueryPerformanceCounter(&end);
-        metrics->triangle_ticks += (end.QuadPart - start.QuadPart);
-        metrics->triangle_sample_count++;
-    }
-#endif
 
     return SR_OK;
 }
@@ -322,7 +289,6 @@ sr_result raster_submit_triangle(sr_memory *memory,
 static sr_result submit_texture_rectangle(sr_memory *memory,
                                           tmem_state *tmem,
                                           const rdp_state *state,
-                                          rdp_metrics *metrics,
                                           const rdp_command *cmd)
 {
     const rdp_rect_cmd *rect_cmd = &cmd->decoded.rect;
@@ -347,7 +313,7 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
     }
 
     rdp_primitive_state primitive;
-    pipeline_compile_rectangle(&primitive, state, tmem, metrics, tile_index);
+    pipeline_compile_rectangle(&primitive, state, tmem, tile_index);
 
     for (uint32_t y = rect.y0; y <= rect.y1; y++) {
         const int32_t dx = (int32_t)(rect.x0 - base_x);
@@ -378,13 +344,12 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
 static sr_result raster_submit_rectangle_internal(sr_memory *memory,
                                                   tmem_state *tmem,
                                                   const rdp_state *state,
-                                                  rdp_metrics *metrics,
                                                   const rdp_command *cmd)
 {
     raster_rect rect;
 
     if (cmd->id == RDP_CMD_TEXTURE_RECTANGLE || cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP) {
-        return submit_texture_rectangle(memory, tmem, state, metrics, cmd);
+        return submit_texture_rectangle(memory, tmem, state, cmd);
     }
 
     if (cmd->id != RDP_CMD_FILL_RECTANGLE) {
@@ -418,30 +383,7 @@ static sr_result raster_submit_rectangle_internal(sr_memory *memory,
 sr_result raster_submit_rectangle(sr_memory *memory,
                                   tmem_state *tmem,
                                   const rdp_state *state,
-                                  rdp_metrics *metrics,
                                   const rdp_command *cmd)
 {
-#if SOFTRDP_ENABLE_PERF_METRICS
-    LARGE_INTEGER start, end;
-#if SOFTRDP_ENABLE_PERF_OVERLAY && !SOFTRDP_ENABLE_PERF_LOG
-    const bool measure_detail = metrics && metrics->detail_measure_enabled &&
-        ((metrics->rect_count & 15u) == metrics->detail_sample_phase);
-#else
-    const bool measure_detail = metrics != NULL;
-#endif
-    if (metrics) metrics->rect_count++;
-    if (measure_detail) QueryPerformanceCounter(&start);
-#endif
-
-    sr_result result = raster_submit_rectangle_internal(memory, tmem, state, metrics, cmd);
-
-#if SOFTRDP_ENABLE_PERF_METRICS
-    if (measure_detail) {
-        QueryPerformanceCounter(&end);
-        metrics->rect_ticks += (end.QuadPart - start.QuadPart);
-        metrics->rect_sample_count++;
-    }
-#endif
-
-    return result;
+    return raster_submit_rectangle_internal(memory, tmem, state, cmd);
 }

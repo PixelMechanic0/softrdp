@@ -49,111 +49,6 @@ static void perspective_divide_packet(const int32_t *restrict coord,
     }
 }
 
-static uint32_t texture_coord_to_texel(int32_t value)
-{
-    return value <= 0 ? 0 : (uint32_t)value >> 5;
-}
-
-static void record_texture_sample_coord(rdp_metrics *metrics, uint32_t s, uint32_t t)
-{
-    if (!metrics) {
-        return;
-    }
-
-    if (metrics->texture_sample_attempts == 0) {
-        metrics->texture_sample_min_s = s;
-        metrics->texture_sample_max_s = s;
-        metrics->texture_sample_min_t = t;
-        metrics->texture_sample_max_t = t;
-    } else {
-        if (s < metrics->texture_sample_min_s) metrics->texture_sample_min_s = s;
-        if (s > metrics->texture_sample_max_s) metrics->texture_sample_max_s = s;
-        if (t < metrics->texture_sample_min_t) metrics->texture_sample_min_t = t;
-        if (t > metrics->texture_sample_max_t) metrics->texture_sample_max_t = t;
-    }
-}
-
-static void record_texture_sample_fixed(rdp_metrics *metrics, int32_t s, int32_t t, int32_t w)
-{
-    if (!metrics) {
-        return;
-    }
-
-    if (metrics->texture_sample_attempts == 0) {
-        metrics->texture_sample_min_s_fixed = s;
-        metrics->texture_sample_max_s_fixed = s;
-        metrics->texture_sample_min_t_fixed = t;
-        metrics->texture_sample_max_t_fixed = t;
-        metrics->texture_sample_min_w_fixed = w;
-        metrics->texture_sample_max_w_fixed = w;
-    } else {
-        if (s < metrics->texture_sample_min_s_fixed) metrics->texture_sample_min_s_fixed = s;
-        if (s > metrics->texture_sample_max_s_fixed) metrics->texture_sample_max_s_fixed = s;
-        if (t < metrics->texture_sample_min_t_fixed) metrics->texture_sample_min_t_fixed = t;
-        if (t > metrics->texture_sample_max_t_fixed) metrics->texture_sample_max_t_fixed = t;
-        if (w < metrics->texture_sample_min_w_fixed) metrics->texture_sample_min_w_fixed = w;
-        if (w > metrics->texture_sample_max_w_fixed) metrics->texture_sample_max_w_fixed = w;
-    }
-}
-
-static void record_texture_sample_color(rdp_metrics *metrics, rdp_color color)
-{
-    if (!metrics) {
-        return;
-    }
-
-    const uint32_t packed = ((uint32_t)color.r << 24) |
-                            ((uint32_t)color.g << 16) |
-                            ((uint32_t)color.b << 8) |
-                            (uint32_t)color.a;
-    metrics->texture_sample_color_xor ^= packed;
-}
-
-static void record_texture_sample_attempt(rdp_metrics *metrics,
-                                          const rdp_texture_sample_state *texture,
-                                          const rdp_color_pipeline_state *color)
-{
-    if (!metrics || !texture || !color) {
-        return;
-    }
-
-    const rdp_tile *tile = &texture->tile;
-    metrics->texture_sample_attempts++;
-    if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
-        metrics->texture_sample_by_format_size[tile->format][tile->size]++;
-    }
-    if (texture->tlut_enable) {
-        metrics->texture_sample_tlut_attempts++;
-    }
-    if (texture->bilerp) {
-        metrics->texture_sample_bilerp_attempts++;
-    }
-    if (texture->sample_quad) {
-        metrics->texture_sample_quad_attempts++;
-    }
-    if (texture->mid_texel) {
-        metrics->texture_sample_mid_texel_attempts++;
-    }
-    if (texture->perspective) {
-        metrics->texture_sample_perspective_attempts++;
-    }
-    if (color->needs_texel0 && color->needs_shade) {
-        metrics->texture_sample_texel0_shade_attempts++;
-    }
-}
-
-static void record_texture_sample_hit(rdp_metrics *metrics, const rdp_tile *tile)
-{
-    if (!metrics || !tile) {
-        return;
-    }
-
-    metrics->texture_sample_hits++;
-    if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
-        metrics->texture_sample_hits_by_format_size[tile->format][tile->size]++;
-    }
-}
-
 typedef struct rdp_depth_result {
     bool pass;
     bool update;
@@ -194,10 +89,6 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
     }
     if (depth->compare) {
         result->pass = new_depth <= old_depth;
-        if (primitive->metrics) {
-            primitive->metrics->fragment_depth_tests++;
-            if (!result->pass) primitive->metrics->fragment_depth_rejects++;
-        }
     }
     if (result->pass && depth->update) {
         result->update = true;
@@ -256,6 +147,7 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
             block->shade[component][lane] = (int32_t)((uint32_t)base[component] + lane * (uint32_t)dr[component]);
             block->combiner.shade[component][lane] = shade_component_to_u8(block->shade[component][lane]);
         }
+        block->combiner.lod_fraction[lane] = 0u;
     }
     if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
     if (decoded->has_texture && primitive->color.needs_texel0) {
@@ -296,12 +188,11 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     const rdp_texture_sample_state *texture = &primitive->texture;
     const rdp_color_pipeline_state *color_pipeline = &primitive->color;
     const tmem_state *tmem = primitive->tmem;
-    rdp_metrics *metrics = primitive->metrics;
     rdp_span_work cursor = *work;
     const int total = work->x_end - work->x_begin + 1;
 
     for (int offset = 0; offset < total; offset += (int)RDP_PACKET_LANES) {
-        pipeline_triangle_block block = {0};
+        pipeline_triangle_block block;
         const uint32_t count = (uint32_t)(total - offset) < RDP_PACKET_LANES
             ? (uint32_t)(total - offset) : RDP_PACKET_LANES;
         setup_triangle_block(primitive, &cursor, count, &block);
@@ -341,14 +232,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 if (!(block.live_mask & bit)) continue;
                 const int32_t s = block.sample_s[lane];
                 const int32_t t = block.sample_t[lane];
-                record_texture_sample_fixed(metrics, s, t,
-                    texture->perspective ? block.w[lane] : 0);
-                record_texture_sample_coord(metrics, texture_coord_to_texel(s), texture_coord_to_texel(t));
-                record_texture_sample_attempt(metrics, texture, color_pipeline);
                 rdp_color texel;
                 if (tmem_sample_color_fixed5(tmem, texture, s, t, &texel)) {
-                    record_texture_sample_hit(metrics, &texture->tile);
-                    record_texture_sample_color(metrics, texel);
                     block.combiner.texel0[0][lane] = texel.r;
                     block.combiner.texel0[1][lane] = texel.g;
                     block.combiner.texel0[2][lane] = texel.b;
@@ -356,13 +241,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     for (uint32_t component = 0; component < 4u; component++)
                         block.combiner.texel1[component][lane] = block.combiner.texel0[component][lane];
                 } else if (decoded->has_shade) {
-                    if (metrics) {
-                        metrics->texture_sample_misses++;
-                        metrics->texture_sample_shade_fallbacks++;
-                    }
                     block.fallback_mask |= bit;
                 } else {
-                    if (metrics) metrics->texture_sample_misses++;
                     block.live_mask &= (uint16_t)~bit;
                 }
             }
@@ -409,9 +289,13 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
     for (uint32_t offset = 0; offset < total; offset += RDP_PACKET_LANES) {
         const uint32_t count = total - offset < RDP_PACKET_LANES
             ? total - offset : RDP_PACKET_LANES;
-        rdp_combiner_packet packet = { .count = count };
+        rdp_combiner_packet packet;
+        packet.count = count;
         uint16_t live_mask = count == RDP_PACKET_LANES ? 0xffffu
             : (uint16_t)((1u << count) - 1u);
+        for (uint32_t lane = 0; lane < count; lane++) {
+            packet.lod_fraction[lane] = 0u;
+        }
         if (needs_texture) {
             for (uint32_t lane = 0; lane < count; lane++) {
                 const int32_t s = (int32_t)((uint32_t)work->s_fixed +
@@ -419,14 +303,11 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                 const int32_t t = (int32_t)((uint32_t)work->t_fixed +
                     (offset + lane) * (uint32_t)work->dtdx_fixed);
                 rdp_color texel;
-                if (primitive->metrics) primitive->metrics->rect_texture_sample_attempts++;
                 if (!tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
                                               s, t, &texel)) {
                     live_mask &= (uint16_t)~(1u << lane);
-                    if (primitive->metrics) primitive->metrics->rect_texture_sample_misses++;
                     continue;
                 }
-                if (primitive->metrics) primitive->metrics->rect_texture_sample_hits++;
                 packet.texel0[0][lane] = packet.texel1[0][lane] = texel.r;
                 packet.texel0[1][lane] = packet.texel1[1][lane] = texel.g;
                 packet.texel0[2][lane] = packet.texel1[2][lane] = texel.b;

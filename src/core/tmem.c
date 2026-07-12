@@ -5,10 +5,6 @@
 
 #include <string.h>
 
-#if SOFTRDP_ENABLE_PERF_METRICS
-#define NOMINMAX
-#include <windows.h>
-#endif
 
 void tmem_init(tmem_state *tmem)
 {
@@ -261,7 +257,6 @@ static sr_result load_rgba32_tile(tmem_state *tmem, sr_memory *memory, const rdp
 static sr_result tmem_load_tile_internal(tmem_state *tmem,
                                          sr_memory *memory,
                                          const rdp_state *state,
-                                         rdp_metrics *metrics,
                                          const rdp_command *cmd)
 {
     if (!tmem || !memory || !state || !cmd) {
@@ -270,29 +265,6 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem,
 
     const uint32_t tile_index = cmd->decoded.load.tile_index;
     const rdp_tile *tile = &state->tiles[tile_index];
-
-#if SOFTRDP_ENABLE_PERF_METRICS
-    if (metrics) {
-        switch (cmd->id) {
-        case RDP_CMD_LOAD_BLOCK:
-            metrics->tex_load_block_count++;
-            break;
-        case RDP_CMD_LOAD_TLUT:
-            metrics->tex_load_tlut_count++;
-            break;
-        case RDP_CMD_LOAD_TILE:
-            metrics->tex_load_tile_count++;
-            break;
-        default:
-            break;
-        }
-        if (tile->format <= RDP_FORMAT_I && tile->size <= RDP_SIZE_32BPP) {
-            metrics->tex_load_by_format_size[tile->format][tile->size]++;
-        }
-    }
-#else
-    (void)metrics;
-#endif
 
     if (cmd->id == RDP_CMD_LOAD_TLUT) {
         return load_tlut(tmem, memory, state, tile, cmd);
@@ -328,30 +300,7 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem,
 sr_result tmem_load_tile(tmem_state *tmem,
                          sr_memory *memory,
                          const rdp_state *state,
-                         rdp_metrics *metrics,
                          const rdp_command *cmd)
 {
-#if SOFTRDP_ENABLE_PERF_METRICS
-    LARGE_INTEGER start, end;
-#if SOFTRDP_ENABLE_PERF_OVERLAY && !SOFTRDP_ENABLE_PERF_LOG
-    const bool measure_detail = metrics && metrics->detail_measure_enabled &&
-        ((metrics->tex_load_count & 15u) == metrics->detail_sample_phase);
-#else
-    const bool measure_detail = metrics != NULL;
-#endif
-    if (metrics) metrics->tex_load_count++;
-    if (measure_detail) QueryPerformanceCounter(&start);
-#endif
-
-    sr_result result = tmem_load_tile_internal(tmem, memory, state, metrics, cmd);
-
-#if SOFTRDP_ENABLE_PERF_METRICS
-    if (measure_detail) {
-        QueryPerformanceCounter(&end);
-        metrics->tex_load_ticks += (end.QuadPart - start.QuadPart);
-        metrics->tex_load_sample_count++;
-    }
-#endif
-
-    return result;
+    return tmem_load_tile_internal(tmem, memory, state, cmd);
 }
