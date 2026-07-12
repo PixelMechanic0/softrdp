@@ -44,6 +44,8 @@ typedef struct vi_scanout_plan {
     uint32_t bytes_per_pixel;
     uint32_t output_width;
     uint32_t output_height;
+    uint32_t display_width;
+    uint32_t display_height;
     uint32_t aa_mode;
     bool serrate;
     bool gamma_enable;

@@ -335,6 +335,13 @@ void sr_present_clear(sr_present *present)
     SwapBuffers((HDC)present->hdc);
 }
 
+void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t height)
+{
+    if (!present) return;
+    present->display_width = width;
+    present->display_height = height;
+}
+
 void sr_present_draw(sr_present *present)
 {
     int width;
@@ -356,7 +363,11 @@ void sr_present_draw(sr_present *present)
         int viewport_height = height;
         if (present->frame_width && present->frame_height && width > 0 && height > 0) {
             const double window_aspect = (double)width / (double)height;
-            const double frame_aspect = (double)present->frame_width / (double)present->frame_height;
+            const uint32_t aspect_width = present->display_width ?
+                                          present->display_width : present->frame_width;
+            const uint32_t aspect_height = present->display_height ?
+                                           present->display_height : present->frame_height;
+            const double frame_aspect = (double)aspect_width / (double)aspect_height;
             if (window_aspect > frame_aspect) {
                 viewport_width = (int)((double)height * frame_aspect);
             } else {
@@ -424,6 +435,13 @@ void sr_present_shutdown(sr_present *present)
 void sr_present_clear(sr_present *present)
 {
     (void)present;
+}
+
+void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t height)
+{
+    (void)present;
+    (void)width;
+    (void)height;
 }
 
 void sr_present_draw(sr_present *present)

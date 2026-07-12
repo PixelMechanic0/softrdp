@@ -101,6 +101,12 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     plan->bytes_per_pixel = type == VI_TYPE_RGBA5551 ? 2u : 4u;
     plan->output_width = (uint32_t)output_width;
     plan->output_height = (uint32_t)output_height;
+    plan->display_width = plan->output_width;
+    plan->display_height = (uint32_t)(((uint64_t)plan->output_height * 2u *
+                           VI_V_SYNC_NTSC) /
+                           ((vi->v_sync & 0x3ffu) ?
+                            (vi->v_sync & 0x3ffu) : VI_V_SYNC_NTSC));
+    if (!plan->display_height) plan->display_height = plan->output_height;
     plan->aa_mode = (vi->control >> VI_CONTROL_AA_MODE_SHIFT) & 3u;
     plan->serrate = (vi->control & VI_CONTROL_SERRATE) != 0;
     plan->gamma_enable = (vi->control & VI_CONTROL_GAMMA) != 0;

@@ -9,6 +9,8 @@ typedef struct sr_context sr_context;
 typedef struct sr_vi_frame_info {
     uint32_t width;
     uint32_t height;
+    uint32_t display_width;
+    uint32_t display_height;
     bool display;
 } sr_vi_frame_info;
 

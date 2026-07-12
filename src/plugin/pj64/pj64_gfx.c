@@ -19,6 +19,8 @@ static sr_rgba8 *g_frame_pixels;
 static uint32_t g_frame_capacity_pixels;
 static uint32_t g_frame_width = 640u;
 static uint32_t g_frame_height = 480u;
+static uint32_t g_display_width = 640u;
+static uint32_t g_display_height = 480u;
 static bool g_runtime_started;
 static uint32_t g_process_dlist_calls;
 static uint32_t g_process_rdp_calls;
@@ -741,7 +743,10 @@ void PJ64_CALL UpdateScreen(void)
         vi_info.height <= PJ64_MAX_FRAME_HEIGHT) {
         g_frame_width = vi_info.width;
         g_frame_height = vi_info.height;
+        g_display_width = vi_info.display_width ? vi_info.display_width : vi_info.width;
+        g_display_height = vi_info.display_height ? vi_info.display_height : vi_info.height;
     }
+    sr_present_set_display_size(&g_present, g_display_width, g_display_height);
 
     if (g_record_active) {
         g_record_active = false;

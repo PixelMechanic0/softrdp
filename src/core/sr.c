@@ -339,6 +339,8 @@ sr_result sr_get_vi_frame_info(sr_context *ctx, sr_vi_frame_info *info)
     ctx->vi_plan_prepared = true;
     info->width = ctx->vi_plan.output_width;
     info->height = ctx->vi_plan.output_height;
+    info->display_width = ctx->vi_plan.display_width;
+    info->display_height = ctx->vi_plan.display_height;
     info->display = ctx->vi_plan.state == VI_SCANOUT_READY;
     return SR_OK;
 }
