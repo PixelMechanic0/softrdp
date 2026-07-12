@@ -37,6 +37,7 @@ static uint32_t g_last_logged_fragment_color_xor;
 static bool g_dump_requested = false;
 static bool g_record_active = false;
 static FILE* g_frame_dump_file = NULL;
+static uint32_t g_rdram_size = 0x400000;
 
 static bool dump_write_all(FILE *file, const void *data, size_t size)
 {
@@ -308,7 +309,24 @@ static sr_host_interface make_host_interface(GFX_INFO *gfx)
     memset(&host, 0, sizeof(host));
 
     host.rdram = gfx->RDRAM;
-    host.rdram_size = SR_RDRAM_MAX_SIZE;
+#ifdef _WIN32
+    {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery(gfx->RDRAM, &mbi, sizeof(mbi)) != 0) {
+            char *base = (char *)mbi.BaseAddress;
+            size_t offset = (char *)gfx->RDRAM - base;
+            if (mbi.RegionSize > offset) {
+                size_t size = mbi.RegionSize - offset;
+                if (size >= 0x800000) {
+                    g_rdram_size = 0x800000;
+                } else if (size >= 0x400000) {
+                    g_rdram_size = 0x400000;
+                }
+            }
+        }
+    }
+#endif
+    host.rdram_size = g_rdram_size;
     host.rdram_bswapped = gfx->MemoryBswaped != 0;
     host.dmem = gfx->DMEM;
     host.mi_intr_reg = reg32(gfx->MI_INTR_REG);
@@ -707,7 +725,7 @@ void PJ64_CALL ProcessRDPList(void)
             g_frame_dump_file = fopen("frame_dump.bin", "wb");
             if (g_frame_dump_file) {
                 uint32_t magic = 0x32444653; // "SFD2"
-                uint32_t rdram_size = SR_RDRAM_MAX_SIZE;
+                uint32_t rdram_size = g_rdram_size;
                 uint32_t bswapped = g_gfx.MemoryBswaped ? 1 : 0;
                 uint32_t zero = 0;
                 uint32_t state_size = (uint32_t)sr_state_snapshot_size();
@@ -731,7 +749,7 @@ void PJ64_CALL ProcessRDPList(void)
                 
                 // Write initial RDRAM
                 if (g_frame_dump_file &&
-                    !dump_write_all(g_frame_dump_file, g_gfx.RDRAM, SR_RDRAM_MAX_SIZE)) {
+                    !dump_write_all(g_frame_dump_file, g_gfx.RDRAM, g_rdram_size)) {
                     pj64_log_printf("ERROR: Could not write initial RDRAM to frame dump (errno=%d)", errno);
                     fclose(g_frame_dump_file);
                     g_frame_dump_file = NULL;
@@ -748,7 +766,7 @@ void PJ64_CALL ProcessRDPList(void)
         if (g_record_active && g_frame_dump_file) {
             uint32_t current = read_reg_value(g_gfx.DPC_CURRENT_REG) & ~7u;
             uint32_t end = read_reg_value(g_gfx.DPC_END_REG) & ~7u;
-            uint32_t size = (end > current && end <= SR_RDRAM_MAX_SIZE) ? (end - current) : 0;
+            uint32_t size = (end > current && current < g_rdram_size && end <= g_rdram_size) ? (end - current) : 0;
             
             uint32_t dp_regs[8];
             dp_regs[0] = read_reg_value(g_gfx.DPC_START_REG);
@@ -887,7 +905,7 @@ void PJ64_CALL UpdateScreen(void)
         if (g_frame_dump_file) {
             // Write final reference RDRAM output
             const bool wrote_rdram = dump_write_all(g_frame_dump_file, g_gfx.RDRAM,
-                                                     SR_RDRAM_MAX_SIZE);
+                                                     g_rdram_size);
             const bool sought_header = wrote_rdram &&
                                        fseek(g_frame_dump_file, g_list_count_offset, SEEK_SET) == 0;
             const bool wrote_count = sought_header &&
