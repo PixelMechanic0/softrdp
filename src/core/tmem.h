@@ -742,9 +742,8 @@ static inline bool tmem_sample_bilerp_compiled_fixed5(const tmem_state *tmem,
         const uint32_t frac_s = (uint32_t)rel_s & 31u;
         const uint32_t frac_t = (uint32_t)rel_t & 31u;
 
-        if (tmem_resolve_compiled_coord_fixed5(sample, s_fixed + 32, t_fixed, &local_s1, &local_t) &&
-            tmem_resolve_compiled_coord_fixed5(sample, s_fixed, t_fixed + 32, &local_s, &local_t1) &&
-            tmem_resolve_compiled_coord_fixed5(sample, s_fixed + 32, t_fixed + 32, &local_s1, &local_t1) &&
+        if (tmem_resolve_compiled_axis_fixed5(sample, s_fixed + 32, true, &local_s1) &&
+            tmem_resolve_compiled_axis_fixed5(sample, t_fixed + 32, false, &local_t1) &&
             tmem_fetch_color_local(tmem, sample, local_s, local_t, &c00) &&
             tmem_fetch_color_local(tmem, sample, local_s1, local_t, &c10) &&
             tmem_fetch_color_local(tmem, sample, local_s, local_t1, &c01) &&
