@@ -2,6 +2,7 @@
 #define RDP_METRICS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * Renderer instrumentation is deliberately separate from emulated RDP state.
@@ -13,10 +14,16 @@ typedef struct rdp_metrics {
 
     uint64_t triangle_count;
     uint64_t triangle_ticks;
+    uint64_t triangle_sample_count;
     uint64_t rect_count;
     uint64_t rect_ticks;
+    uint64_t rect_sample_count;
     uint64_t tex_load_count;
     uint64_t tex_load_ticks;
+    uint64_t tex_load_sample_count;
+    bool detail_measure_enabled;
+    uint32_t detail_sample_phase;
+    uint32_t detail_vi_index;
     uint64_t texture_sample_attempts;
     uint64_t texture_sample_hits;
     uint64_t texture_sample_misses;

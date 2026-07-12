@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
 #define NOMINMAX
 #include <windows.h>
 #endif
@@ -171,6 +171,7 @@ sr_context *sr_create(const sr_host_interface *host)
     rdp_state_init(&ctx->rdp);
     tmem_init(&ctx->tmem);
     vi_init(&ctx->vi);
+    ctx->metrics.detail_measure_enabled = true;
     return ctx;
 }
 
@@ -286,7 +287,7 @@ sr_result sr_process_rdp_list(sr_context *ctx)
         return SR_ERROR_INVALID_ARGUMENT;
     }
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
     LARGE_INTEGER start, end;
     QueryPerformanceCounter(&start);
 #endif
@@ -296,7 +297,7 @@ sr_result sr_process_rdp_list(sr_context *ctx)
         vi_latch_registers(&ctx->vi, &ctx->host);
     }
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
     QueryPerformanceCounter(&end);
     ctx->metrics.process_rdp_ticks += (end.QuadPart - start.QuadPart);
 #endif
@@ -316,16 +317,21 @@ sr_result sr_update_screen(sr_context *ctx, sr_framebuffer *out)
     }
     ctx->vi_plan_prepared = false;
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
     LARGE_INTEGER start, end;
     QueryPerformanceCounter(&start);
 #endif
 
     sr_result result = vi_execute_scanout(&ctx->vi_plan, &ctx->memory, out);
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
     QueryPerformanceCounter(&end);
     ctx->metrics.vi_ticks += (end.QuadPart - start.QuadPart);
+    ctx->metrics.detail_vi_index++;
+    ctx->metrics.detail_measure_enabled =
+        (ctx->metrics.detail_vi_index & 3u) == 0u;
+    ctx->metrics.detail_sample_phase =
+        (ctx->metrics.detail_vi_index >> 2u) & 15u;
 #endif
 
     return result;
@@ -353,13 +359,16 @@ sr_debug_stats sr_get_debug_stats(const sr_context *ctx)
         stats = ctx->debug;
         stats.commands_seen = ctx->metrics.commands_seen;
         stats.draw_calls_seen = ctx->metrics.draw_calls_seen;
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
         stats.triangle_count = ctx->metrics.triangle_count;
         stats.triangle_ticks = ctx->metrics.triangle_ticks;
+        stats.triangle_sample_count = ctx->metrics.triangle_sample_count;
         stats.rect_count = ctx->metrics.rect_count;
         stats.rect_ticks = ctx->metrics.rect_ticks;
+        stats.rect_sample_count = ctx->metrics.rect_sample_count;
         stats.tex_load_count = ctx->metrics.tex_load_count;
         stats.tex_load_ticks = ctx->metrics.tex_load_ticks;
+        stats.tex_load_sample_count = ctx->metrics.tex_load_sample_count;
         stats.texture_sample_attempts = ctx->metrics.texture_sample_attempts;
         stats.texture_sample_hits = ctx->metrics.texture_sample_hits;
         stats.texture_sample_misses = ctx->metrics.texture_sample_misses;

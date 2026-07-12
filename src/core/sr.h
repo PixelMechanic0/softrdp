@@ -51,10 +51,13 @@ typedef struct sr_debug_stats {
 
     uint64_t triangle_count;
     uint64_t triangle_ticks;
+    uint64_t triangle_sample_count;
     uint64_t rect_count;
     uint64_t rect_ticks;
+    uint64_t rect_sample_count;
     uint64_t tex_load_count;
     uint64_t tex_load_ticks;
+    uint64_t tex_load_sample_count;
     uint64_t texture_sample_attempts;
     uint64_t texture_sample_hits;
     uint64_t texture_sample_misses;

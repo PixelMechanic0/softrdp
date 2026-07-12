@@ -21,6 +21,9 @@
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
+#define OVERLAY_WIDTH 128
+#define OVERLAY_HEIGHT 64
+
 typedef HGLRC(WINAPI *wgl_create_context_attribs_arb_proc)(HDC hdc, HGLRC share, const int *attribs);
 typedef void(APIENTRY *gl_attach_shader_proc)(GLuint program, GLuint shader);
 typedef void(APIENTRY *gl_bind_vertex_array_proc)(GLuint array);
@@ -286,6 +289,15 @@ bool sr_present_init(sr_present *present, HWND hwnd)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
+    glGenTextures(1, &present->overlay_texture);
+    glBindTexture(GL_TEXTURE_2D, present->overlay_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, OVERLAY_WIDTH, OVERLAY_HEIGHT,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
     present->ready = true;
     sr_present_clear(present);
     return true;
@@ -301,6 +313,9 @@ void sr_present_shutdown(sr_present *present)
         wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc);
         if (present->texture) {
             glDeleteTextures(1, &present->texture);
+        }
+        if (present->overlay_texture) {
+            glDeleteTextures(1, &present->overlay_texture);
         }
         if (present->vao && p_glDeleteVertexArrays) {
             p_glDeleteVertexArrays(1, &present->vao);
@@ -342,6 +357,56 @@ void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t h
     present->display_height = height;
 }
 
+static void glyph_rows(char c, uint8_t rows[7])
+{
+#define G(a,b,c,d,e,f,g) do { rows[0]=a; rows[1]=b; rows[2]=c; rows[3]=d; rows[4]=e; rows[5]=f; rows[6]=g; } while (0)
+    switch (c) {
+    case '0': G(14,17,19,21,25,17,14); break; case '1': G(4,12,4,4,4,4,14); break;
+    case '2': G(14,17,1,2,4,8,31); break; case '3': G(30,1,1,14,1,1,30); break;
+    case '4': G(2,6,10,18,31,2,2); break; case '5': G(31,16,16,30,1,1,30); break;
+    case '6': G(14,16,16,30,17,17,14); break; case '7': G(31,1,2,4,8,8,8); break;
+    case '8': G(14,17,17,14,17,17,14); break; case '9': G(14,17,17,15,1,1,14); break;
+    case 'A': G(14,17,17,31,17,17,17); break; case 'C': G(14,17,16,16,16,17,14); break;
+    case 'E': G(31,16,16,30,16,16,31); break; case 'H': G(17,17,17,31,17,17,17); break;
+    case 'I': G(14,4,4,4,4,4,14); break; case 'M': G(17,27,21,21,17,17,17); break;
+    case 'N': G(17,25,21,19,17,17,17); break; case 'O': G(14,17,17,17,17,17,14); break;
+    case 'P': G(30,17,17,30,16,16,16); break; case 'R': G(30,17,17,30,20,18,17); break;
+    case 'S': G(15,16,16,14,1,1,30); break; case 'T': G(31,4,4,4,4,4,4); break;
+    case 'V': G(17,17,17,17,17,10,4); break; case '/': G(1,2,2,4,8,8,16); break;
+    case '.': G(0,0,0,0,0,12,12); break; case ':': G(0,12,12,0,12,12,0); break;
+    case '-': G(0,0,0,31,0,0,0); break; default: G(0,0,0,0,0,0,0); break;
+    }
+#undef G
+}
+
+void sr_present_set_overlay_text(sr_present *present, const char *text)
+{
+    static uint8_t pixels[OVERLAY_WIDTH * OVERLAY_HEIGHT * 4];
+    if (!present || !present->ready || !text ||
+        !wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) return;
+    for (uint32_t i = 0; i < OVERLAY_WIDTH * OVERLAY_HEIGHT; i++) {
+        pixels[i * 4 + 0] = 0; pixels[i * 4 + 1] = 0;
+        pixels[i * 4 + 2] = 0; pixels[i * 4 + 3] = 160;
+    }
+    uint32_t pen_x = 3, pen_y = 3;
+    for (const char *p = text; *p && pen_y + 7u < OVERLAY_HEIGHT; p++) {
+        if (*p == '\n') { pen_x = 3; pen_y += 8; continue; }
+        if (pen_x + 5u >= OVERLAY_WIDTH) continue;
+        uint8_t rows[7]; glyph_rows(*p, rows);
+        for (uint32_t y = 0; y < 7; y++) for (uint32_t x = 0; x < 5; x++) {
+            if (rows[y] & (1u << (4u - x))) {
+                const uint32_t i = ((pen_y + y) * OVERLAY_WIDTH + pen_x + x) * 4u;
+                pixels[i+0] = 255; pixels[i+1] = 255; pixels[i+2] = 255; pixels[i+3] = 255;
+            }
+        }
+        pen_x += 6;
+    }
+    glBindTexture(GL_TEXTURE_2D, present->overlay_texture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, OVERLAY_WIDTH, OVERLAY_HEIGHT,
+                    GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    present->has_overlay = true;
+}
+
 void sr_present_draw(sr_present *present)
 {
     int width;
@@ -380,6 +445,17 @@ void sr_present_draw(sr_present *present)
         p_glBindVertexArray(present->vao);
         glBindTexture(GL_TEXTURE_2D, present->texture);
         glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    if (present->has_overlay) {
+        const int overlay_width = OVERLAY_WIDTH * 3 / 2;
+        const int overlay_height = OVERLAY_HEIGHT * 3 / 2;
+        glViewport(8, height - overlay_height - 8,
+                   overlay_width, overlay_height);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindTexture(GL_TEXTURE_2D, present->overlay_texture);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDisable(GL_BLEND);
     }
 
     SwapBuffers((HDC)present->hdc);
@@ -442,6 +518,12 @@ void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t h
     (void)present;
     (void)width;
     (void)height;
+}
+
+void sr_present_set_overlay_text(sr_present *present, const char *text)
+{
+    (void)present;
+    (void)text;
 }
 
 void sr_present_draw(sr_present *present)

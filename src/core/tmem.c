@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
 #define NOMINMAX
 #include <windows.h>
 #endif
@@ -267,7 +267,7 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem,
     const uint32_t tile_index = cmd->decoded.load.tile_index;
     const rdp_tile *tile = &state->tiles[tile_index];
 
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
     if (metrics) {
         switch (cmd->id) {
         case RDP_CMD_LOAD_BLOCK:
@@ -327,18 +327,25 @@ sr_result tmem_load_tile(tmem_state *tmem,
                          rdp_metrics *metrics,
                          const rdp_command *cmd)
 {
-#if SOFTRDP_ENABLE_PERF_LOG
+#if SOFTRDP_ENABLE_PERF_METRICS
     LARGE_INTEGER start, end;
-    QueryPerformanceCounter(&start);
+#if SOFTRDP_ENABLE_PERF_OVERLAY && !SOFTRDP_ENABLE_PERF_LOG
+    const bool measure_detail = metrics && metrics->detail_measure_enabled &&
+        ((metrics->tex_load_count & 15u) == metrics->detail_sample_phase);
+#else
+    const bool measure_detail = metrics != NULL;
+#endif
+    if (metrics) metrics->tex_load_count++;
+    if (measure_detail) QueryPerformanceCounter(&start);
 #endif
 
     sr_result result = tmem_load_tile_internal(tmem, memory, state, metrics, cmd);
 
-#if SOFTRDP_ENABLE_PERF_LOG
-    QueryPerformanceCounter(&end);
-    if (metrics) {
+#if SOFTRDP_ENABLE_PERF_METRICS
+    if (measure_detail) {
+        QueryPerformanceCounter(&end);
         metrics->tex_load_ticks += (end.QuadPart - start.QuadPart);
-        metrics->tex_load_count++;
+        metrics->tex_load_sample_count++;
     }
 #endif
 

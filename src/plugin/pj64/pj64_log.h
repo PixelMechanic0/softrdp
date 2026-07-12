@@ -11,6 +11,10 @@
 #define SOFTRDP_ENABLE_PERF_LOG 0
 #endif
 
+#ifndef SOFTRDP_ENABLE_PERF_OVERLAY
+#define SOFTRDP_ENABLE_PERF_OVERLAY 0
+#endif
+
 /* Auto-enable main logging if performance logging is requested */
 #if SOFTRDP_ENABLE_PERF_LOG && !SOFTRDP_ENABLE_LOG
 #undef SOFTRDP_ENABLE_LOG

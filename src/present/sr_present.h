@@ -17,6 +17,7 @@ typedef struct sr_present {
     void *hdc;
     void *glrc;
     uint32_t texture;
+    uint32_t overlay_texture;
     uint32_t program;
     uint32_t vao;
     uint32_t frame_width;
@@ -25,12 +26,14 @@ typedef struct sr_present {
     uint32_t display_height;
     bool ready;
     bool has_frame;
+    bool has_overlay;
 } sr_present;
 
 bool sr_present_init(sr_present *present, HWND hwnd);
 void sr_present_shutdown(sr_present *present);
 void sr_present_clear(sr_present *present);
 void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t height);
+void sr_present_set_overlay_text(sr_present *present, const char *text);
 void sr_present_draw(sr_present *present);
 bool sr_present_upload_rgba8(sr_present *present,
                              const sr_rgba8 *pixels,

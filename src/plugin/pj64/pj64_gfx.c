@@ -45,6 +45,105 @@ static uint32_t g_perf_frame_count;
 static double g_perf_draw_total_ms;
 #endif
 
+#if SOFTRDP_ENABLE_PERF_OVERLAY
+typedef struct perf_overlay_state {
+    sr_debug_stats last_stats;
+    LARGE_INTEGER last_update;
+    LARGE_INTEGER rate_window_start;
+    LARGE_INTEGER last_text_update;
+    uint32_t rate_updates;
+    double vi_per_second;
+    double triangle_ms;
+    double rect_ms;
+    double tmem_ms;
+    double other_ms;
+    double vi_ms;
+    double present_ms;
+    bool initialized;
+} perf_overlay_state;
+static perf_overlay_state g_overlay;
+
+static double smooth_value(double previous, double sample)
+{
+    return previous == 0.0 ? sample : previous + (sample - previous) * 0.1;
+}
+
+static void prepare_perf_overlay(void)
+{
+    LARGE_INTEGER now, frequency;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&frequency);
+    const sr_debug_stats stats = sr_get_debug_stats(g_context);
+    if (g_overlay.initialized) {
+        const uint64_t rdp = stats.process_rdp_ticks - g_overlay.last_stats.process_rdp_ticks;
+        const uint64_t tri_ticks = stats.triangle_ticks - g_overlay.last_stats.triangle_ticks;
+        const uint64_t rect_ticks = stats.rect_ticks - g_overlay.last_stats.rect_ticks;
+        const uint64_t tmem_ticks = stats.tex_load_ticks - g_overlay.last_stats.tex_load_ticks;
+        const uint64_t tri_count = stats.triangle_count - g_overlay.last_stats.triangle_count;
+        const uint64_t rect_count = stats.rect_count - g_overlay.last_stats.rect_count;
+        const uint64_t tmem_count = stats.tex_load_count - g_overlay.last_stats.tex_load_count;
+        const uint64_t tri_samples = stats.triangle_sample_count - g_overlay.last_stats.triangle_sample_count;
+        const uint64_t rect_samples = stats.rect_sample_count - g_overlay.last_stats.rect_sample_count;
+        const uint64_t tmem_samples = stats.tex_load_sample_count - g_overlay.last_stats.tex_load_sample_count;
+        const uint64_t vi = stats.vi_ticks - g_overlay.last_stats.vi_ticks;
+        const double to_ms = 1000.0 / (double)frequency.QuadPart;
+        g_overlay.rate_updates++;
+        const double rate_elapsed = (double)(now.QuadPart -
+                                             g_overlay.rate_window_start.QuadPart);
+        if (rate_elapsed >= (double)frequency.QuadPart) {
+            g_overlay.vi_per_second = (double)g_overlay.rate_updates *
+                                      (double)frequency.QuadPart / rate_elapsed;
+            g_overlay.rate_window_start = now;
+            g_overlay.rate_updates = 0;
+        }
+        const bool detail_complete =
+            (tri_count == 0 || tri_samples != 0) &&
+            (rect_count == 0 || rect_samples != 0) &&
+            (tmem_count == 0 || tmem_samples != 0);
+        if (detail_complete) {
+            const double tri_est = tri_samples ?
+                (double)tri_ticks * (double)tri_count / (double)tri_samples : 0.0;
+            const double rect_est = rect_samples ?
+                (double)rect_ticks * (double)rect_count / (double)rect_samples : 0.0;
+            const double tmem_est = tmem_samples ?
+                (double)tmem_ticks * (double)tmem_count / (double)tmem_samples : 0.0;
+            const double accounted = tri_est + rect_est + tmem_est;
+            const double other = (double)rdp > accounted ? (double)rdp - accounted : 0.0;
+            g_overlay.triangle_ms = smooth_value(g_overlay.triangle_ms, tri_est * to_ms);
+            g_overlay.rect_ms = smooth_value(g_overlay.rect_ms, rect_est * to_ms);
+            g_overlay.tmem_ms = smooth_value(g_overlay.tmem_ms, tmem_est * to_ms);
+            g_overlay.other_ms = smooth_value(g_overlay.other_ms, other * to_ms);
+        }
+        g_overlay.vi_ms = smooth_value(g_overlay.vi_ms, vi * to_ms);
+    }
+    g_overlay.last_stats = stats;
+    g_overlay.last_update = now;
+    if (!g_overlay.initialized) g_overlay.rate_window_start = now;
+    g_overlay.initialized = true;
+
+    if (g_overlay.last_text_update.QuadPart == 0 ||
+        now.QuadPart - g_overlay.last_text_update.QuadPart >= frequency.QuadPart / 4) {
+        char text[256];
+        snprintf(text, sizeof(text),
+                 "VI/S %5.1f\nTRI %6.2f\nRECT %5.2f\nTMEM %5.2f\nOTHER %4.2f\nVI %7.2f\nPRESENT %2.2f",
+                 g_overlay.vi_per_second, g_overlay.triangle_ms,
+                 g_overlay.rect_ms, g_overlay.tmem_ms, g_overlay.other_ms,
+                 g_overlay.vi_ms, g_overlay.present_ms);
+        sr_present_set_overlay_text(&g_present, text);
+        g_overlay.last_text_update = now;
+    }
+}
+
+static void record_present_time(LARGE_INTEGER start, LARGE_INTEGER end)
+{
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    const double sample = (double)(end.QuadPart - start.QuadPart) * 1000.0 /
+                          (double)frequency.QuadPart;
+    g_overlay.present_ms = smooth_value(g_overlay.present_ms, sample);
+}
+#endif
+
 static uint32_t *reg32(DWORD *reg)
 {
     return (uint32_t *)(void *)reg;
@@ -503,6 +602,9 @@ static void stop_runtime(void)
     g_last_logged_fragment_alpha_rejects = 0;
     g_last_logged_fragment_writes = 0;
     g_last_logged_fragment_color_xor = 0;
+#if SOFTRDP_ENABLE_PERF_OVERLAY
+    memset(&g_overlay, 0, sizeof(g_overlay));
+#endif
     pj64_log_close();
 }
 
@@ -784,6 +886,11 @@ void PJ64_CALL UpdateScreen(void)
     fb.stride_pixels = g_frame_width;
 
     result = sr_update_screen(g_context, &fb);
+#if SOFTRDP_ENABLE_PERF_OVERLAY
+    prepare_perf_overlay();
+    LARGE_INTEGER present_start, present_end;
+    QueryPerformanceCounter(&present_start);
+#endif
     if (result == SR_OK && fb.valid && vi_info.display) {
         for (uint32_t y = 0; y < fb.height; y++) {
             const sr_rgba8 *row = fb.pixels + y * fb.stride_pixels;
@@ -805,6 +912,10 @@ void PJ64_CALL UpdateScreen(void)
                                            g_frame_width, g_frame_height,
                                            g_frame_width);
     }
+#if SOFTRDP_ENABLE_PERF_OVERLAY
+    QueryPerformanceCounter(&present_end);
+    record_present_time(present_start, present_end);
+#endif
 
 #if SOFTRDP_ENABLE_PERF_LOG
     g_perf_frame_count++;
