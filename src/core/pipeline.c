@@ -1,5 +1,6 @@
 #include "pipeline.h"
 #include <string.h>
+#include <immintrin.h>
 #include "framebuffer.h"
 #include "rdp_memory.h"
 #include "tmem.h"
@@ -35,17 +36,33 @@ static void perspective_divide_packet(const int32_t *restrict coord,
                                       int32_t *restrict output,
                                       uint32_t count)
 {
-    for (uint32_t lane = 0; lane < count; lane++) {
-        if (w[lane] <= 0) {
-            output[lane] = 0x7fff;
-            continue;
-        }
-        /* coord*32768 is at most 47 significant bits, so binary64 retains the
-         * integer numerator exactly. The clamped quotient has enough precision
-         * to preserve the integer division's truncation. */
-        const double divided = ((double)coord[lane] * 32768.0) / (double)w[lane];
-        output[lane] = divided < -65536.0 ? -65536 :
-                       divided > 65535.0 ? 65535 : (int32_t)divided;
+    uint32_t chunks = (count + 3u) >> 2;
+    __m128i zero = _mm_setzero_si128();
+    
+    for (uint32_t chunk = 0; chunk < chunks; chunk++) {
+        uint32_t offset = chunk << 2;
+        
+        __m128i coord_i = _mm_loadu_si128((const __m128i *)&coord[offset]);
+        __m128i w_i = _mm_loadu_si128((const __m128i *)&w[offset]);
+        
+        __m256d coord_d = _mm256_cvtepi32_pd(coord_i);
+        __m256d w_d = _mm256_cvtepi32_pd(w_i);
+        
+        __m256d coord_scaled = _mm256_mul_pd(coord_d, _mm256_set1_pd(32768.0));
+        __m256d div = _mm256_div_pd(coord_scaled, w_d);
+        
+        __m256d clamped = _mm256_max_pd(div, _mm256_set1_pd(-65536.0));
+        clamped = _mm256_min_pd(clamped, _mm256_set1_pd(65535.0));
+        
+        __m128i res = _mm256_cvttpd_epi32(clamped);
+        
+        __m128i is_zero = _mm_cmpeq_epi32(w_i, zero);
+        __m128i is_neg = _mm_cmpgt_epi32(zero, w_i);
+        __m128i w_le_0 = _mm_or_si128(is_zero, is_neg);
+        
+        __m128i final_res = _mm_blendv_epi8(res, _mm_set1_epi32(0x7fff), w_le_0);
+        
+        _mm_storeu_si128((__m128i *)&output[offset], final_res);
     }
 }
 
