@@ -1,5 +1,5 @@
 #include "rdp_commands.h"
-
+#include "rdp_memory.h"
 #include "raster.h"
 #include "tmem.h"
 #include "combiner.h"
@@ -262,9 +262,17 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_SYNC_TILE:
     case RDP_CMD_SYNC_FULL:                       return SR_OK;
 
-    case RDP_CMD_SET_COLOR_IMAGE:                 state->color_image = cmd->decoded.set_color_image; return SR_OK;
-    case RDP_CMD_SET_TEXTURE_IMAGE:               state->texture_image = cmd->decoded.set_texture_image; return SR_OK;
-    case RDP_CMD_SET_MASK_IMAGE:                  state->depth_image_address = cmd->decoded.set_mask_image.address; return SR_OK;
+    case RDP_CMD_SET_COLOR_IMAGE:
+        state->color_image = cmd->decoded.set_color_image;
+        state->color_image.address &= (memory->rdram_size - 1u);
+        return SR_OK;
+    case RDP_CMD_SET_TEXTURE_IMAGE:
+        state->texture_image = cmd->decoded.set_texture_image;
+        state->texture_image.address &= (memory->rdram_size - 1u);
+        return SR_OK;
+    case RDP_CMD_SET_MASK_IMAGE:
+        state->depth_image_address = cmd->decoded.set_mask_image.address & (memory->rdram_size - 1u);
+        return SR_OK;
     case RDP_CMD_SET_SCISSOR:                     state->scissor_x0 = cmd->decoded.set_scissor.x0; state->scissor_y0 = cmd->decoded.set_scissor.y0; state->scissor_x1 = cmd->decoded.set_scissor.x1; state->scissor_y1 = cmd->decoded.set_scissor.y1; return SR_OK;
     case RDP_CMD_SET_OTHER_MODES:
         state->other_modes = cmd->decoded.set_other_modes;

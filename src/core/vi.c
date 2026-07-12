@@ -56,7 +56,7 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     if (!vi || !memory || !memory->rdram) return;
 
     const uint32_t type = vi->control & VI_TYPE_MASK;
-    const uint32_t origin = vi->origin & 0x00ffffffu;
+    const uint32_t origin = (vi->origin & 0x00ffffffu) & (memory->rdram_size - 1u);
     const uint32_t source_stride = vi->width & 0xfffu;
     const uint32_t x_add = vi->x_scale & 0xfffu;
     const uint32_t y_add = vi->y_scale & 0xfffu;
