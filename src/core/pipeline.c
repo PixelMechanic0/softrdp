@@ -140,10 +140,10 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
         block->lod_fraction[lane] = 0u;
     }
     if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
-    if (decoded->has_texture && primitive->color.needs_texel0) {
+    if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
         cursor->s_fixed = (int32_t)((uint32_t)cursor->s_fixed + count * (uint32_t)decoded->texture.dsdx);
         cursor->t_fixed = (int32_t)((uint32_t)cursor->t_fixed + count * (uint32_t)decoded->texture.dtdx);
-        if (primitive->texture.perspective)
+        if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE)
             cursor->w_fixed = (int32_t)((uint32_t)cursor->w_fixed + count * (uint32_t)decoded->texture.dwdx);
     }
     if (decoded->has_shade) {
@@ -187,7 +187,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             ? (uint32_t)(total - offset) : RDP_PACKET_LANES;
         setup_triangle_block(primitive, &cursor, count, &block);
 
-        if (primitive->fill_mode) {
+        if (primitive->block_plan.stages & RDP_BLOCK_STAGE_FILL) {
             for (uint32_t lane = 0; lane < count; lane++) {
                 const sr_result result = framebuffer_write_fill_pixel(memory,
                     &primitive->framebuffer, (uint32_t)block.x[lane], (uint32_t)work->y);
@@ -196,27 +196,29 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             continue;
         }
 
-        for (uint32_t lane = 0; lane < count; lane++) {
-            rdp_span_work lane_work = {
-                .y = work->y,
-                .depth_fixed = block.depth_fixed[lane]
-            };
-            rdp_depth_result depth;
-            const uint32_t depth_address = primitive->fragment.depth.image_address +
-                ((uint32_t)work->y * primitive->framebuffer.color_image.width + block.x[0]) * 2u + lane * 2u;
-            const sr_result result = scalar_depth_test(memory, primitive,
-                &lane_work, depth_address, &depth);
-            if (result != SR_OK) return result;
-            if (!depth.pass) block.active_mask &= (uint16_t)~(1u << lane);
-            if (depth.update) {
-                block.depth_update_mask |= (uint16_t)(1u << lane);
-                block.depth_address[lane] = depth.address;
-                block.depth_value[lane] = depth.compressed;
+        if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
+            for (uint32_t lane = 0; lane < count; lane++) {
+                rdp_span_work lane_work = {
+                    .y = work->y,
+                    .depth_fixed = block.depth_fixed[lane]
+                };
+                rdp_depth_result depth;
+                const uint32_t depth_address = primitive->fragment.depth.image_address +
+                    ((uint32_t)work->y * primitive->framebuffer.color_image.width + block.x[0]) * 2u + lane * 2u;
+                const sr_result result = scalar_depth_test(memory, primitive,
+                    &lane_work, depth_address, &depth);
+                if (result != SR_OK) return result;
+                if (!depth.pass) block.active_mask &= (uint16_t)~(1u << lane);
+                if (depth.update) {
+                    block.depth_update_mask |= (uint16_t)(1u << lane);
+                    block.depth_address[lane] = depth.address;
+                    block.depth_value[lane] = depth.compressed;
+                }
             }
         }
 
-        if (decoded->has_texture && color_pipeline->needs_texel0) {
-            if (texture->perspective) {
+        if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
+            if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
                 perspective_divide_packet(block.s, block.w, block.sample_s, count);
                 perspective_divide_packet(block.t, block.w, block.sample_t, count);
             } else {
@@ -278,7 +280,8 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
     }
 
     const rdp_color_pipeline_state *color = &primitive->color;
-    const bool needs_texture = color->needs_texel0 || color->needs_texel1;
+    const bool needs_texture =
+        (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) != 0u;
     const uint32_t total = (uint32_t)(work->x_end - work->x_begin + 1);
     for (uint32_t offset = 0; offset < total; offset += RDP_PACKET_LANES) {
         const uint32_t count = total - offset < RDP_PACKET_LANES
@@ -343,8 +346,8 @@ sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,
         }
 
         bool passes_alpha = true;
-        if (primitive->fragment.blend.alpha_compare) {
-            if (primitive->framebuffer.color_image.size == RDP_SIZE_16BPP)
+        if (primitive->block_plan.stages & RDP_BLOCK_STAGE_ALPHA_COMPARE) {
+            if (primitive->block_plan.framebuffer == RDP_BLOCK_FRAMEBUFFER_16)
                 passes_alpha = texel.a != 0u;
             else
                 passes_alpha = texel.a >= primitive->fragment.blend.blend_color.a;

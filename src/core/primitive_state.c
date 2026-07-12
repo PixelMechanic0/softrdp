@@ -117,6 +117,45 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     }
 }
 
+static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
+                                        bool has_texture,
+                                        bool has_shade,
+                                        bool has_depth)
+{
+    rdp_block_plan *plan = &primitive->block_plan;
+    const rdp_depth_state *depth = &primitive->fragment.depth;
+    plan->stages = 0u;
+    plan->coordinates = primitive->texture.perspective
+        ? RDP_BLOCK_COORD_PERSPECTIVE : RDP_BLOCK_COORD_DIRECT;
+    plan->framebuffer = primitive->framebuffer.color_image.size == RDP_SIZE_32BPP
+        ? RDP_BLOCK_FRAMEBUFFER_32
+        : primitive->framebuffer.color_image.size == RDP_SIZE_16BPP
+            ? RDP_BLOCK_FRAMEBUFFER_16 : RDP_BLOCK_FRAMEBUFFER_8;
+    plan->depth = depth->compare
+        ? (depth->update ? RDP_BLOCK_DEPTH_TEST_UPDATE : RDP_BLOCK_DEPTH_TEST)
+        : (depth->update ? RDP_BLOCK_DEPTH_UPDATE : RDP_BLOCK_DEPTH_NONE);
+    if (plan->depth != RDP_BLOCK_DEPTH_NONE && depth->image_address &&
+        (has_depth || depth->source_primitive))
+        plan->stages |= RDP_BLOCK_STAGE_DEPTH;
+    if (has_shade && primitive->color.needs_shade)
+        plan->stages |= RDP_BLOCK_STAGE_SHADE;
+    if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1)) {
+        plan->stages |= RDP_BLOCK_STAGE_TEXTURE;
+        plan->sampler = primitive->texture.sampler_class == 2u
+            ? RDP_BLOCK_SAMPLER_RGBA16_BILERP
+            : primitive->texture.sampler_class == 1u
+                ? RDP_BLOCK_SAMPLER_RGBA16_POINT : RDP_BLOCK_SAMPLER_GENERIC;
+    } else {
+        plan->sampler = RDP_BLOCK_SAMPLER_NONE;
+    }
+    if (primitive->fragment.blend.force_blend || primitive->fragment.blend.image_read)
+        plan->stages |= RDP_BLOCK_STAGE_BLEND;
+    if (primitive->fragment.blend.alpha_compare)
+        plan->stages |= RDP_BLOCK_STAGE_ALPHA_COMPARE;
+    if (primitive->fill_mode)
+        plan->stages |= RDP_BLOCK_STAGE_FILL;
+}
+
 void pipeline_compile_triangle(rdp_primitive_state *primitive,
                                const rdp_state *registers,
                                const tmem_state *tmem,
@@ -134,6 +173,8 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
     primitive->triangle = *triangle;
     primitive->fill_mode = fill_mode;
     primitive->span_kernel = RDP_SPAN_KERNEL_TRIANGLE;
+    pipeline_compile_block_plan(primitive, triangle->has_texture,
+                                triangle->has_shade, triangle->has_depth);
 }
 
 void pipeline_compile_rectangle(rdp_primitive_state *primitive,
@@ -149,4 +190,5 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
     primitive->span_kernel = registers->other_modes.cycle_type == RDP_CYCLE_COPY
         ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
         : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
+    pipeline_compile_block_plan(primitive, true, false, false);
 }
