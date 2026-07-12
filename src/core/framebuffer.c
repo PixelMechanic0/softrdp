@@ -123,14 +123,13 @@ sr_result framebuffer_fill_rect(sr_memory *memory, const rdp_framebuffer_state *
     const uint64_t last_address = state->color_image.address +
                                   last_pixel * bytes_per_pixel + bytes_per_pixel - 1u;
     if (first_address >= memory->rdram_size || last_address >= memory->rdram_size)
-        return SR_ERROR_INVALID_ARGUMENT;
+        return SR_OK;
 
-    bool success;
     switch (state->color_image.size) {
-    case RDP_SIZE_8BPP: success = fill_rect_8(memory, state, x0, y0, x1, y1); break;
-    case RDP_SIZE_16BPP: success = fill_rect_16(memory, state, x0, y0, x1, y1); break;
-    case RDP_SIZE_32BPP: success = fill_rect_32(memory, state, x0, y0, x1, y1); break;
+    case RDP_SIZE_8BPP: fill_rect_8(memory, state, x0, y0, x1, y1); break;
+    case RDP_SIZE_16BPP: fill_rect_16(memory, state, x0, y0, x1, y1); break;
+    case RDP_SIZE_32BPP: fill_rect_32(memory, state, x0, y0, x1, y1); break;
     default: return SR_ERROR_UNSUPPORTED;
     }
-    return success ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+    return SR_OK;
 }
