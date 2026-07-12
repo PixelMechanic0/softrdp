@@ -10,7 +10,7 @@ BUILD32_DIR := build32
 PJ64_CC ?= i686-w64-mingw32-gcc
 
 CFLAGS ?= -O2 -g
-CFLAGS += -std=c17 -Wall -Wextra -Wpedantic -MMD -MP -Isrc
+CFLAGS += -mavx2 -std=c17 -Wall -Wextra -Wpedantic -MMD -MP -Isrc
 SOFTRDP_LOG ?= 0
 SOFTRDP_PERF_LOG ?= 0
 SOFTRDP_PERF_OVERLAY ?= 0
