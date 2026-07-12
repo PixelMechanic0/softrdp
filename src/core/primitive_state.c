@@ -119,7 +119,7 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
                             triangle->position.tile);
     primitive->triangle = *triangle;
     primitive->fill_mode = fill_mode;
-    primitive->span_kernel = pipeline_select_triangle_kernel(primitive);
+    primitive->span_kernel = RDP_SPAN_KERNEL_TRIANGLE;
 }
 
 void pipeline_compile_rectangle(rdp_primitive_state *primitive,

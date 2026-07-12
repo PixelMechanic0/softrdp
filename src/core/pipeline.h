@@ -35,11 +35,7 @@ typedef struct rdp_span_work {
 
 typedef enum rdp_span_kernel_kind {
     RDP_SPAN_KERNEL_INVALID = 0,
-    RDP_SPAN_KERNEL_FILL_TRIANGLE,
-    RDP_SPAN_KERNEL_DEPTH_TRIANGLE,
-    RDP_SPAN_KERNEL_SHADE_TRIANGLE,
-    RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE,
-    RDP_SPAN_KERNEL_TEXTURE_TRIANGLE,
+    RDP_SPAN_KERNEL_TRIANGLE,
     RDP_SPAN_KERNEL_TEXTURE_RECTANGLE,
     RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
 } rdp_span_kernel_kind;
@@ -84,24 +80,6 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                                         const rdp_primitive_state *primitive,
                                         const rdp_span_work *work);
 
-sr_result pipeline_render_fill_triangle_span(sr_memory *memory,
-                                             const rdp_primitive_state *primitive,
-                                             const rdp_span_work *work);
-
-sr_result pipeline_render_depth_triangle_span(sr_memory *memory,
-                                               const rdp_primitive_state *primitive,
-                                               const rdp_span_work *work);
-
-sr_result pipeline_render_shade_triangle_span(sr_memory *memory,
-                                              const rdp_primitive_state *primitive,
-                                              const rdp_span_work *work);
-
-sr_result pipeline_render_shade_depth_triangle_span(sr_memory *memory,
-                                                    const rdp_primitive_state *primitive,
-                                                    const rdp_span_work *work);
-
-rdp_span_kernel_kind pipeline_select_triangle_kernel(const rdp_primitive_state *primitive);
-
 void pipeline_compile_rectangle(rdp_primitive_state *primitive,
                                 const rdp_state *registers,
                                 const tmem_state *tmem,
@@ -134,15 +112,7 @@ static inline sr_result pipeline_render_span(sr_memory *memory,
     }
 
     switch (primitive->span_kernel) {
-    case RDP_SPAN_KERNEL_FILL_TRIANGLE:
-        return pipeline_render_fill_triangle_span(memory, primitive, work);
-    case RDP_SPAN_KERNEL_DEPTH_TRIANGLE:
-        return pipeline_render_depth_triangle_span(memory, primitive, work);
-    case RDP_SPAN_KERNEL_SHADE_TRIANGLE:
-        return pipeline_render_shade_triangle_span(memory, primitive, work);
-    case RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE:
-        return pipeline_render_shade_depth_triangle_span(memory, primitive, work);
-    case RDP_SPAN_KERNEL_TEXTURE_TRIANGLE:
+    case RDP_SPAN_KERNEL_TRIANGLE:
         return pipeline_render_triangle_span(memory, primitive, work);
     case RDP_SPAN_KERNEL_TEXTURE_RECTANGLE:
         return pipeline_render_rectangle_span(memory, primitive, work);

@@ -20,28 +20,6 @@ static uint8_t shade_component_to_u8(int32_t value)
     return component < 0 ? 0 : (component > 255 ? 255 : (uint8_t)component);
 }
 
-static inline rdp_color shade_base_color(const raster_shade_setup *shade)
-{
-    return (rdp_color){
-        shade_component_to_u8(shade->r),
-        shade_component_to_u8(shade->g),
-        shade_component_to_u8(shade->b),
-        shade_component_to_u8(shade->a)
-    };
-}
-
-static inline rdp_color combine_shade_pixel(const rdp_primitive_state *primitive,
-                                            const raster_shade_setup *shade)
-{
-    const pipeline_inputs inputs = {
-        .shade = shade_base_color(shade),
-        .primitive = primitive->color.primitive_color,
-        .environment = primitive->color.environment_color,
-        .primitive_lod_fraction = primitive->color.primitive_lod_fraction
-    };
-    return pipeline_combine_pixel(&primitive->color, &inputs).color;
-}
-
 static int32_t triangle_coord_fixed5(int32_t interpolated)
 {
     return (int16_t)((uint32_t)interpolated >> 16);
@@ -171,28 +149,6 @@ typedef struct rdp_depth_result {
     uint16_t compressed;
 } rdp_depth_result;
 
-static inline void triangle_span_work_step(const raster_decoded_triangle *decoded,
-                                           const rdp_primitive_state *primitive,
-                                           rdp_span_work *work)
-{
-    if (decoded->has_depth) {
-        work->depth_fixed += decoded->depth.dzdx;
-    }
-    if (decoded->has_texture && primitive->color.needs_texel0) {
-        work->s_fixed += decoded->texture.dsdx;
-        work->t_fixed += decoded->texture.dtdx;
-        if (primitive->texture.perspective) {
-            work->w_fixed += decoded->texture.dwdx;
-        }
-    }
-    if (decoded->has_shade) {
-        work->shade.r += decoded->shade.drdx & ~0x1f;
-        work->shade.g += decoded->shade.dgdx & ~0x1f;
-        work->shade.b += decoded->shade.dbdx & ~0x1f;
-        work->shade.a += decoded->shade.dadx & ~0x1f;
-    }
-}
-
 static inline sr_result scalar_depth_test(sr_memory *memory,
                                           const rdp_primitive_state *primitive,
                                           const rdp_span_work *cursor,
@@ -252,94 +208,56 @@ static inline sr_result commit_depth_update(sr_memory *memory,
     return SR_OK;
 }
 
-sr_result pipeline_render_fill_triangle_span(sr_memory *memory,
-                                             const rdp_primitive_state *primitive,
-                                             const rdp_span_work *work)
-{
-    for (int x = work->x_begin; x <= work->x_end; x++) {
-        sr_result result = framebuffer_write_fill_pixel(memory,
-                                                        &primitive->framebuffer,
-                                                        (uint32_t)x,
-                                                        (uint32_t)work->y);
-        if (result != SR_OK) {
-            return result;
-        }
-    }
-    return SR_OK;
-}
+typedef struct pipeline_triangle_block {
+    uint32_t count;
+    int x[RDP_PACKET_LANES];
+    int64_t depth_fixed[RDP_PACKET_LANES];
+    int32_t s[RDP_PACKET_LANES], t[RDP_PACKET_LANES], w[RDP_PACKET_LANES];
+    int32_t shade[4][RDP_PACKET_LANES];
+    rdp_depth_result depth[RDP_PACKET_LANES];
+    rdp_combiner_packet combiner;
+    uint16_t live_mask;
+    uint16_t fallback_mask;
+} pipeline_triangle_block;
 
-sr_result pipeline_render_depth_triangle_span(sr_memory *memory,
-                                               const rdp_primitive_state *primitive,
-                                               const rdp_span_work *work)
+static void setup_triangle_block(const rdp_primitive_state *primitive,
+                                 rdp_span_work *cursor,
+                                 uint32_t count,
+                                 pipeline_triangle_block *block)
 {
-    rdp_span_work cursor = *work;
-    for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
-        rdp_depth_result depth;
-        sr_result result = scalar_depth_test(memory, primitive, &cursor, x, &depth);
-        if (result != SR_OK) return result;
-        if (depth.pass) {
-            const pipeline_inputs inputs = {
-                .primitive = primitive->color.primitive_color,
-                .environment = primitive->color.environment_color,
-                .primitive_lod_fraction = primitive->color.primitive_lod_fraction
-            };
-            bool accepted;
-            const rdp_color color = pipeline_combine_pixel(&primitive->color, &inputs).color;
-            result = fragment_finish(memory, primitive, (uint32_t)x,
-                                             (uint32_t)cursor.y, color, 0u, &accepted);
-            if (result != SR_OK) return result;
-            result = commit_depth_update(memory, &depth, accepted);
-            if (result != SR_OK) return result;
+    block->count = count;
+    block->combiner.count = count;
+    block->live_mask = count == RDP_PACKET_LANES ? 0xffffu : (uint16_t)((1u << count) - 1u);
+    block->fallback_mask = 0u;
+    const raster_decoded_triangle *decoded = &primitive->triangle;
+    const int32_t dr[4] = { decoded->shade.drdx & ~0x1f, decoded->shade.dgdx & ~0x1f,
+                            decoded->shade.dbdx & ~0x1f, decoded->shade.dadx & ~0x1f };
+    const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
+    for (uint32_t lane = 0; lane < count; lane++) {
+        block->x[lane] = cursor->x_begin + (int)lane;
+        block->depth_fixed[lane] = cursor->depth_fixed + (int64_t)lane * decoded->depth.dzdx;
+        block->s[lane] = (int32_t)((uint32_t)cursor->s_fixed + lane * (uint32_t)decoded->texture.dsdx);
+        block->t[lane] = (int32_t)((uint32_t)cursor->t_fixed + lane * (uint32_t)decoded->texture.dtdx);
+        block->w[lane] = (int32_t)((uint32_t)cursor->w_fixed + lane * (uint32_t)decoded->texture.dwdx);
+        for (uint32_t component = 0; component < 4u; component++) {
+            block->shade[component][lane] = (int32_t)((uint32_t)base[component] + lane * (uint32_t)dr[component]);
+            block->combiner.shade[component][lane] = shade_component_to_u8(block->shade[component][lane]);
         }
-        triangle_span_work_step(&primitive->triangle, primitive, &cursor);
     }
-    return SR_OK;
-}
-
-sr_result pipeline_render_shade_triangle_span(sr_memory *memory,
-                                              const rdp_primitive_state *primitive,
-                                              const rdp_span_work *work)
-{
-    rdp_span_work cursor = *work;
-    for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
-        const rdp_color color = combine_shade_pixel(primitive, &cursor.shade);
-        sr_result result = fragment_finish(memory, primitive, (uint32_t)x,
-                                                   (uint32_t)cursor.y, color,
-                                                   shade_base_color(&cursor.shade).a, NULL);
-        if (result != SR_OK) {
-            return result;
-        }
-        triangle_span_work_step(&primitive->triangle, primitive, &cursor);
+    if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
+    if (decoded->has_texture && primitive->color.needs_texel0) {
+        cursor->s_fixed = (int32_t)((uint32_t)cursor->s_fixed + count * (uint32_t)decoded->texture.dsdx);
+        cursor->t_fixed = (int32_t)((uint32_t)cursor->t_fixed + count * (uint32_t)decoded->texture.dtdx);
+        if (primitive->texture.perspective)
+            cursor->w_fixed = (int32_t)((uint32_t)cursor->w_fixed + count * (uint32_t)decoded->texture.dwdx);
     }
-    return SR_OK;
-}
-
-sr_result pipeline_render_shade_depth_triangle_span(sr_memory *memory,
-                                                    const rdp_primitive_state *primitive,
-                                                    const rdp_span_work *work)
-{
-    rdp_span_work cursor = *work;
-    for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
-        rdp_depth_result depth;
-        sr_result result = scalar_depth_test(memory, primitive, &cursor, x, &depth);
-        if (result != SR_OK) {
-            return result;
-        }
-        if (depth.pass) {
-            const rdp_color color = combine_shade_pixel(primitive, &cursor.shade);
-            bool accepted;
-            result = fragment_finish(memory, primitive, (uint32_t)x,
-                                             (uint32_t)cursor.y, color,
-                                             shade_base_color(&cursor.shade).a, &accepted);
-            if (result != SR_OK) {
-                return result;
-            }
-            result = commit_depth_update(memory, &depth, accepted);
-            if (result != SR_OK) return result;
-        }
-        triangle_span_work_step(&primitive->triangle, primitive, &cursor);
+    if (decoded->has_shade) {
+        cursor->shade.r = (int32_t)((uint32_t)cursor->shade.r + count * (uint32_t)dr[0]);
+        cursor->shade.g = (int32_t)((uint32_t)cursor->shade.g + count * (uint32_t)dr[1]);
+        cursor->shade.b = (int32_t)((uint32_t)cursor->shade.b + count * (uint32_t)dr[2]);
+        cursor->shade.a = (int32_t)((uint32_t)cursor->shade.a + count * (uint32_t)dr[3]);
     }
-    return SR_OK;
+    cursor->x_begin += (int)count;
 }
 
 /*
@@ -367,125 +285,99 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     const tmem_state *tmem = primitive->tmem;
     rdp_metrics *metrics = primitive->metrics;
     rdp_span_work cursor = *work;
+    const int total = work->x_end - work->x_begin + 1;
 
-    for (int x = cursor.x_begin; x <= cursor.x_end; x++) {
-        rdp_depth_result depth;
-        sr_result depth_result = scalar_depth_test(memory, primitive, &cursor, x, &depth);
-        if (depth_result != SR_OK) {
-            return depth_result;
+    for (int offset = 0; offset < total; offset += (int)RDP_PACKET_LANES) {
+        pipeline_triangle_block block;
+        const uint32_t count = (uint32_t)(total - offset) < RDP_PACKET_LANES
+            ? (uint32_t)(total - offset) : RDP_PACKET_LANES;
+        setup_triangle_block(primitive, &cursor, count, &block);
+
+        if (primitive->fill_mode) {
+            for (uint32_t lane = 0; lane < count; lane++) {
+                const sr_result result = framebuffer_write_fill_pixel(memory,
+                    &primitive->framebuffer, (uint32_t)block.x[lane], (uint32_t)work->y);
+                if (result != SR_OK) return result;
+            }
+            continue;
         }
 
-        bool fragment_accepted = false;
-        if (depth.pass) {
-            if (decoded->has_texture) {
-                const bool needs_texel0 = color_pipeline->needs_texel0;
-                bool wrote_color = false;
-                if (needs_texel0) {
-                    int32_t s_fixed = cursor.s_fixed;
-                    int32_t t_fixed = cursor.t_fixed;
-                    if (texture->perspective) {
-                        s_fixed = perspective_divide_coord(s_fixed, cursor.w_fixed);
-                        t_fixed = perspective_divide_coord(t_fixed, cursor.w_fixed);
-                    } else {
-                        s_fixed = triangle_coord_fixed5(s_fixed);
-                        t_fixed = triangle_coord_fixed5(t_fixed);
-                    }
+        for (uint32_t lane = 0; lane < count; lane++) {
+            rdp_span_work lane_work = {
+                .y = work->y,
+                .depth_fixed = block.depth_fixed[lane]
+            };
+            const sr_result result = scalar_depth_test(memory, primitive,
+                &lane_work, block.x[lane], &block.depth[lane]);
+            if (result != SR_OK) return result;
+            if (!block.depth[lane].pass) block.live_mask &= (uint16_t)~(1u << lane);
+        }
 
-                    rdp_color texel0;
-                    record_texture_sample_fixed(metrics, s_fixed, t_fixed, texture->perspective ? cursor.w_fixed : 0);
-                    record_texture_sample_coord(metrics, texture_coord_to_texel(s_fixed), texture_coord_to_texel(t_fixed));
-                    record_texture_sample_attempt(metrics, texture, color_pipeline);
-                    if (tmem_sample_color_fixed5(tmem, texture, s_fixed, t_fixed, &texel0)) {
-                        record_texture_sample_hit(metrics, &texture->tile);
-                        record_texture_sample_color(metrics, texel0);
-                        const pipeline_inputs inputs = {
-                            .shade = decoded->has_shade ? shade_base_color(&cursor.shade) : (rdp_color){0, 0, 0, 0},
-                            .texel0 = texel0,
-                            .texel1 = texel0,
-                            .primitive = color_pipeline->primitive_color,
-                            .environment = color_pipeline->environment_color,
-                            .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
-                        };
-                        const rdp_color color = pipeline_combine_pixel(color_pipeline, &inputs).color;
-                        sr_result result = fragment_finish(memory, primitive, (uint32_t)x,
-                                                                  (uint32_t)cursor.y, color,
-                                                                  inputs.shade.a, &fragment_accepted);
-                        if (result != SR_OK) {
-                            return result;
-                        }
-                        wrote_color = true;
-                    } else {
-                        if (metrics) {
-                            metrics->texture_sample_misses++;
-                        }
-                    }
+        if (decoded->has_texture && color_pipeline->needs_texel0) {
+            for (uint32_t lane = 0; lane < count; lane++) {
+                const uint16_t bit = (uint16_t)(1u << lane);
+                if (!(block.live_mask & bit)) continue;
+                int32_t s = block.s[lane];
+                int32_t t = block.t[lane];
+                if (texture->perspective) {
+                    s = perspective_divide_coord(s, block.w[lane]);
+                    t = perspective_divide_coord(t, block.w[lane]);
                 } else {
-                    const pipeline_inputs inputs = {
-                        .shade = decoded->has_shade ? shade_base_color(&cursor.shade) : (rdp_color){0, 0, 0, 0},
-                        .primitive = color_pipeline->primitive_color,
-                        .environment = color_pipeline->environment_color,
-                        .primitive_lod_fraction = color_pipeline->primitive_lod_fraction
-                    };
-                    sr_result result = fragment_finish(memory, primitive, (uint32_t)x,
-                                                               (uint32_t)cursor.y,
-                                                               pipeline_combine_pixel(color_pipeline, &inputs).color,
-                                                               inputs.shade.a, &fragment_accepted);
-                    if (result != SR_OK) {
-                        return result;
-                    }
-                    wrote_color = true;
+                    s = triangle_coord_fixed5(s);
+                    t = triangle_coord_fixed5(t);
                 }
-
-                if (!wrote_color && decoded->has_shade) {
+                record_texture_sample_fixed(metrics, s, t,
+                    texture->perspective ? block.w[lane] : 0);
+                record_texture_sample_coord(metrics, texture_coord_to_texel(s), texture_coord_to_texel(t));
+                record_texture_sample_attempt(metrics, texture, color_pipeline);
+                rdp_color texel;
+                if (tmem_sample_color_fixed5(tmem, texture, s, t, &texel)) {
+                    record_texture_sample_hit(metrics, &texture->tile);
+                    record_texture_sample_color(metrics, texel);
+                    block.combiner.texel0[0][lane] = texel.r;
+                    block.combiner.texel0[1][lane] = texel.g;
+                    block.combiner.texel0[2][lane] = texel.b;
+                    block.combiner.texel0[3][lane] = texel.a;
+                    for (uint32_t component = 0; component < 4u; component++)
+                        block.combiner.texel1[component][lane] = block.combiner.texel0[component][lane];
+                } else if (decoded->has_shade) {
                     if (metrics) {
+                        metrics->texture_sample_misses++;
                         metrics->texture_sample_shade_fallbacks++;
                     }
-                    const rdp_color shade = shade_base_color(&cursor.shade);
-                    sr_result result = fragment_finish(memory, primitive, (uint32_t)x,
-                                                               (uint32_t)cursor.y, shade, shade.a,
-                                                               &fragment_accepted);
-                    if (result != SR_OK) {
-                        return result;
-                    }
-                }
-            } else if (decoded->has_shade) {
-                const rdp_color shade = shade_base_color(&cursor.shade);
-                sr_result result = fragment_finish(memory, primitive, (uint32_t)x,
-                                                           (uint32_t)cursor.y, shade, shade.a,
-                                                           &fragment_accepted);
-                if (result != SR_OK) {
-                    return result;
+                    block.fallback_mask |= bit;
+                } else {
+                    if (metrics) metrics->texture_sample_misses++;
+                    block.live_mask &= (uint16_t)~bit;
                 }
             }
         }
 
-        depth_result = commit_depth_update(memory, &depth, fragment_accepted);
-        if (depth_result != SR_OK) return depth_result;
-
-        triangle_span_work_step(decoded, primitive, &cursor);
+        rdp_combiner_evaluate_packet(color_pipeline, &block.combiner);
+        for (uint32_t lane = 0; lane < count; lane++) {
+            bool accepted = false;
+            const uint16_t bit = (uint16_t)(1u << lane);
+            if (block.live_mask & bit) {
+                const rdp_color color = block.fallback_mask & bit
+                    ? (rdp_color){ (uint8_t)block.combiner.shade[0][lane],
+                                   (uint8_t)block.combiner.shade[1][lane],
+                                   (uint8_t)block.combiner.shade[2][lane],
+                                   (uint8_t)block.combiner.shade[3][lane] }
+                    : (rdp_color){ (uint8_t)block.combiner.output[0][lane],
+                                   (uint8_t)block.combiner.output[1][lane],
+                                   (uint8_t)block.combiner.output[2][lane],
+                                   (uint8_t)block.combiner.output[3][lane] };
+                const sr_result result = fragment_finish(memory, primitive,
+                    (uint32_t)block.x[lane], (uint32_t)work->y, color,
+                    (uint8_t)block.combiner.shade[3][lane], &accepted);
+                if (result != SR_OK) return result;
+            }
+            const sr_result result = commit_depth_update(memory, &block.depth[lane], accepted);
+            if (result != SR_OK) return result;
+        }
     }
 
     return SR_OK;
-}
-
-rdp_span_kernel_kind pipeline_select_triangle_kernel(const rdp_primitive_state *primitive)
-{
-    if (!primitive) {
-        return RDP_SPAN_KERNEL_INVALID;
-    }
-    if (primitive->fill_mode) {
-        return RDP_SPAN_KERNEL_FILL_TRIANGLE;
-    }
-    if (primitive->triangle.has_depth && !primitive->triangle.has_shade &&
-        !primitive->triangle.has_texture) {
-        return RDP_SPAN_KERNEL_DEPTH_TRIANGLE;
-    }
-    if (primitive->triangle.has_shade && !primitive->triangle.has_texture) {
-        return (primitive->triangle.has_depth || primitive->fragment.depth.source_primitive)
-            ? RDP_SPAN_KERNEL_SHADE_DEPTH_TRIANGLE
-                                             : RDP_SPAN_KERNEL_SHADE_TRIANGLE;
-    }
-    return RDP_SPAN_KERNEL_TEXTURE_TRIANGLE;
 }
 
 static sr_result render_rectangle_pixel(sr_memory *memory,

@@ -222,3 +222,77 @@ rdp_color rdp_combiner_evaluate(const rdp_combiner_program *program,
     evaluate_cycle(&program->cycle[1], inputs, &combined);
     return (rdp_color){ clamp_9(combined.r), clamp_9(combined.g), clamp_9(combined.b), clamp_9(combined.a) };
 }
+
+static void packet_source(uint16_t *restrict dst,
+                          rdp_combiner_source source,
+                          const rdp_combiner_packet *packet,
+                          const uint16_t combined[4][RDP_PACKET_LANES],
+                          const rdp_color_pipeline_state *state,
+                          uint32_t component)
+{
+    const uint16_t *src = NULL;
+    uint16_t constant = 0u;
+    switch (source) {
+    case RDP_COMBINER_COMBINED_RGB: src = combined[component]; break;
+    case RDP_COMBINER_COMBINED_ALPHA: src = combined[3]; break;
+    case RDP_COMBINER_TEXEL0_RGB: src = packet->texel0[component]; break;
+    case RDP_COMBINER_TEXEL0_ALPHA: src = packet->texel0[3]; break;
+    case RDP_COMBINER_TEXEL1_RGB: src = packet->texel1[component]; break;
+    case RDP_COMBINER_TEXEL1_ALPHA: src = packet->texel1[3]; break;
+    case RDP_COMBINER_SHADE_RGB: src = packet->shade[component]; break;
+    case RDP_COMBINER_SHADE_ALPHA: src = packet->shade[3]; break;
+    case RDP_COMBINER_PRIMITIVE_RGB:
+        constant = component == 0 ? state->primitive_color.r :
+                   component == 1 ? state->primitive_color.g : state->primitive_color.b; break;
+    case RDP_COMBINER_PRIMITIVE_ALPHA: constant = state->primitive_color.a; break;
+    case RDP_COMBINER_ENVIRONMENT_RGB:
+        constant = component == 0 ? state->environment_color.r :
+                   component == 1 ? state->environment_color.g : state->environment_color.b; break;
+    case RDP_COMBINER_ENVIRONMENT_ALPHA: constant = state->environment_color.a; break;
+    case RDP_COMBINER_LOD_FRACTION: src = packet->lod_fraction; break;
+    case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: constant = state->primitive_lod_fraction; break;
+    case RDP_COMBINER_ONE: constant = 0x100u; break;
+    default: break;
+    }
+    if (src) {
+        for (uint32_t i = 0; i < packet->count; i++) dst[i] = src[i];
+    } else {
+        for (uint32_t i = 0; i < packet->count; i++) dst[i] = constant;
+    }
+}
+
+static void packet_cycle(const rdp_combiner_cycle *cycle,
+                         const rdp_color_pipeline_state *state,
+                         rdp_combiner_packet *packet,
+                         uint16_t combined[4][RDP_PACKET_LANES])
+{
+    uint16_t a[RDP_PACKET_LANES], b[RDP_PACKET_LANES];
+    uint16_t c[RDP_PACKET_LANES], d[RDP_PACKET_LANES];
+    for (uint32_t component = 0; component < 4u; component++) {
+        const bool alpha = component == 3u;
+        packet_source(a, (rdp_combiner_source)(alpha ? cycle->alpha_a : cycle->rgb_a), packet, combined, state, component);
+        packet_source(b, (rdp_combiner_source)(alpha ? cycle->alpha_b : cycle->rgb_b), packet, combined, state, component);
+        packet_source(c, (rdp_combiner_source)(alpha ? cycle->alpha_c : cycle->rgb_c), packet, combined, state, component);
+        packet_source(d, (rdp_combiner_source)(alpha ? cycle->alpha_d : cycle->rgb_d), packet, combined, state, component);
+        if (alpha) {
+            for (uint32_t i = 0; i < packet->count; i++)
+                combined[component][i] = (uint16_t)alpha_equation(a[i], b[i], c[i], d[i]);
+        } else {
+            for (uint32_t i = 0; i < packet->count; i++)
+                combined[component][i] = (uint16_t)((rgb_equation(a[i], b[i], c[i], d[i]) >> 8) & 0x1ff);
+        }
+    }
+}
+
+void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
+                                  rdp_combiner_packet *packet)
+{
+    if (!state || !packet) return;
+    uint16_t combined[4][RDP_PACKET_LANES] = {{0}};
+    if (state->cycle_type == RDP_CYCLE_2)
+        packet_cycle(&state->program.cycle[0], state, packet, combined);
+    packet_cycle(&state->program.cycle[1], state, packet, combined);
+    for (uint32_t component = 0; component < 4u; component++)
+        for (uint32_t i = 0; i < packet->count; i++)
+            packet->output[component][i] = clamp_9(combined[component][i]);
+}
