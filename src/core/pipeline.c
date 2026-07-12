@@ -30,16 +30,23 @@ static int32_t triangle_coord_fixed5(int32_t interpolated)
     return (int16_t)((uint32_t)interpolated >> 16);
 }
 
-static int32_t perspective_divide_coord(int32_t coord, int32_t w)
+static void perspective_divide_packet(const int32_t *restrict coord,
+                                      const int32_t *restrict w,
+                                      int32_t *restrict output,
+                                      uint32_t count)
 {
-    /* S/T and W are interpolated with 16 fractional low bits. Dividing their
-     * truncated high halves quantizes slowly varying coordinates before the
-     * perspective correction and turns textures into large texel blocks. */
-    if (w <= 0) {
-        return 0x7fffu;
+    for (uint32_t lane = 0; lane < count; lane++) {
+        if (w[lane] <= 0) {
+            output[lane] = 0x7fff;
+            continue;
+        }
+        /* coord*32768 is at most 47 significant bits, so binary64 retains the
+         * integer numerator exactly. The clamped quotient has enough precision
+         * to preserve the integer division's truncation. */
+        const double divided = ((double)coord[lane] * 32768.0) / (double)w[lane];
+        output[lane] = divided < -65536.0 ? -65536 :
+                       divided > 65535.0 ? 65535 : (int32_t)divided;
     }
-    const int64_t divided = ((int64_t)coord * 32768ll) / (int64_t)w;
-    return divided < -0x10000ll ? -0x10000 : (divided > 0xffffll ? 0xffff : (int32_t)divided);
 }
 
 static uint32_t texture_coord_to_texel(int32_t value)
@@ -218,6 +225,7 @@ typedef struct pipeline_triangle_block {
     int x[RDP_PACKET_LANES];
     int64_t depth_fixed[RDP_PACKET_LANES];
     int32_t s[RDP_PACKET_LANES], t[RDP_PACKET_LANES], w[RDP_PACKET_LANES];
+    int32_t sample_s[RDP_PACKET_LANES], sample_t[RDP_PACKET_LANES];
     int32_t shade[4][RDP_PACKET_LANES];
     rdp_depth_result depth[RDP_PACKET_LANES];
     rdp_combiner_packet combiner;
@@ -319,18 +327,20 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
         }
 
         if (decoded->has_texture && color_pipeline->needs_texel0) {
+            if (texture->perspective) {
+                perspective_divide_packet(block.s, block.w, block.sample_s, count);
+                perspective_divide_packet(block.t, block.w, block.sample_t, count);
+            } else {
+                for (uint32_t lane = 0; lane < count; lane++) {
+                    block.sample_s[lane] = triangle_coord_fixed5(block.s[lane]);
+                    block.sample_t[lane] = triangle_coord_fixed5(block.t[lane]);
+                }
+            }
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
                 if (!(block.live_mask & bit)) continue;
-                int32_t s = block.s[lane];
-                int32_t t = block.t[lane];
-                if (texture->perspective) {
-                    s = perspective_divide_coord(s, block.w[lane]);
-                    t = perspective_divide_coord(t, block.w[lane]);
-                } else {
-                    s = triangle_coord_fixed5(s);
-                    t = triangle_coord_fixed5(t);
-                }
+                const int32_t s = block.sample_s[lane];
+                const int32_t t = block.sample_t[lane];
                 record_texture_sample_fixed(metrics, s, t,
                     texture->perspective ? block.w[lane] : 0);
                 record_texture_sample_coord(metrics, texture_coord_to_texel(s), texture_coord_to_texel(t));
