@@ -526,6 +526,51 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         return false;
     }
 
+    if (tile->format == RDP_FORMAT_YUV) {
+        if (tile->size != RDP_SIZE_16BPP) {
+            return false;
+        }
+
+        tmem_texel_address addr_y;
+        if (!tmem_resolve_texel_address(tmem, sample, local_s, local_t, &addr_y)) {
+            return false;
+        }
+
+        tmem_texel_address addr_u;
+        if (!tmem_resolve_texel_address(tmem, sample, local_s & ~1u, local_t, &addr_u)) {
+            return false;
+        }
+
+        tmem_texel_address addr_v;
+        if (!tmem_resolve_texel_address(tmem, sample, local_s | 1u, local_t, &addr_v)) {
+            return false;
+        }
+
+        uint16_t word_y = ((uint16_t)tmem->bytes[addr_y.byte] << 8) | (uint16_t)tmem->bytes[addr_y.byte + 1u];
+        uint16_t word_u = ((uint16_t)tmem->bytes[addr_u.byte] << 8) | (uint16_t)tmem->bytes[addr_u.byte + 1u];
+        uint16_t word_v = ((uint16_t)tmem->bytes[addr_v.byte] << 8) | (uint16_t)tmem->bytes[addr_v.byte + 1u];
+
+        uint8_t y = (uint8_t)(word_y >> 8);
+        int32_t u = (int32_t)(word_u & 0xffu) - 128;
+        int32_t v = (int32_t)(word_v & 0xffu) - 128;
+
+        if (sample->convert_one) {
+            int32_t r_val = (int32_t)y + ((sample->convert_k0_tf * v + 0x80) >> 8);
+            int32_t g_val = (int32_t)y + ((sample->convert_k1_tf * u + sample->convert_k2_tf * v + 0x80) >> 8);
+            int32_t b_val = (int32_t)y + ((sample->convert_k3_tf * u + 0x80) >> 8);
+            color->r = r_val < 0 ? 0 : (r_val > 255 ? 255 : (uint8_t)r_val);
+            color->g = g_val < 0 ? 0 : (g_val > 255 ? 255 : (uint8_t)g_val);
+            color->b = b_val < 0 ? 0 : (b_val > 255 ? 255 : (uint8_t)b_val);
+            color->a = y;
+        } else {
+            color->r = (uint8_t)u;
+            color->g = (uint8_t)v;
+            color->b = y;
+            color->a = y;
+        }
+        return true;
+    }
+
     if (tile->format != RDP_FORMAT_RGBA) {
         return false;
     }

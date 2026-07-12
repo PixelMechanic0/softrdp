@@ -322,7 +322,27 @@ sr_result rdp_execute_command(sr_memory *memory,
 
     case RDP_CMD_SET_COMBINE:                    state->combiner = cmd->decoded.set_combine; return SR_OK;
 
-    case RDP_CMD_SET_CONVERT:
+    case RDP_CMD_SET_CONVERT: {
+        int32_t k0 = (int32_t)((cmd->words[0] >> 13) & 0x1ffu);
+        int32_t k1 = (int32_t)((cmd->words[0] >> 4) & 0x1ffu);
+        int32_t k2 = (int32_t)(((cmd->words[0] & 0xfu) << 5) | ((cmd->words[1] >> 27) & 0x1fu));
+        int32_t k3 = (int32_t)((cmd->words[1] >> 18) & 0x1ffu);
+        
+        // Sign-extend 9-bit values
+        k0 = (k0 & 0x100) ? (k0 | ~0x1ff) : k0;
+        k1 = (k1 & 0x100) ? (k1 | ~0x1ff) : k1;
+        k2 = (k2 & 0x100) ? (k2 | ~0x1ff) : k2;
+        k3 = (k3 & 0x100) ? (k3 | ~0x1ff) : k3;
+
+        state->convert_k0_tf = (k0 << 1) + 1;
+        state->convert_k1_tf = (k1 << 1) + 1;
+        state->convert_k2_tf = (k2 << 1) + 1;
+        state->convert_k3_tf = (k3 << 1) + 1;
+        state->convert_k4 = (int32_t)((cmd->words[1] >> 9) & 0x1ffu);
+        state->convert_k5 = (int32_t)(cmd->words[1] & 0x1ffu);
+        return SR_OK;
+    }
+
     case RDP_CMD_SET_KEY_GB:
     case RDP_CMD_SET_KEY_R:                       return SR_OK;
 

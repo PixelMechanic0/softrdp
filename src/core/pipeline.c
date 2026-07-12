@@ -8,9 +8,14 @@
 pipeline_outputs pipeline_combine_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs)
 {
     pipeline_outputs out = { .coverage = 7 };
-    out.color = (!state || !inputs)
-        ? (rdp_color){0, 0, 0, 255}
-        : rdp_combiner_evaluate(&state->program, state->cycle_type, inputs);
+    if (!state || !inputs) {
+        out.color = (rdp_color){0, 0, 0, 255};
+        return out;
+    }
+    pipeline_inputs local_inputs = *inputs;
+    local_inputs.k4 = (uint16_t)state->convert_k4;
+    local_inputs.k5 = (uint16_t)state->convert_k5;
+    out.color = rdp_combiner_evaluate(&state->program, state->cycle_type, &local_inputs);
     return out;
 }
 

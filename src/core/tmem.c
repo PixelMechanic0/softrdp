@@ -34,6 +34,10 @@ static bool texture_state_supports_load(const rdp_state *state, const rdp_tile *
         return tile->size == RDP_SIZE_8BPP || tile->size == RDP_SIZE_16BPP;
     }
 
+    if (tile->format == RDP_FORMAT_YUV) {
+        return tile->size == RDP_SIZE_16BPP;
+    }
+
     if (tile->format == RDP_FORMAT_CI || tile->format == RDP_FORMAT_I) {
         return tile->size == RDP_SIZE_8BPP;
     }

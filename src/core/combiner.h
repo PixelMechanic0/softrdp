@@ -3,6 +3,8 @@
 
 #include "rdp_state.h"
 
+
+
 typedef struct rdp_combiner_inputs {
     rdp_color shade;
     rdp_color texel0;
@@ -11,6 +13,8 @@ typedef struct rdp_combiner_inputs {
     rdp_color environment;
     uint8_t lod_fraction;
     uint8_t primitive_lod_fraction;
+    uint16_t k4;
+    uint16_t k5;
 } rdp_combiner_inputs;
 
 #define RDP_PACKET_LANES 16u

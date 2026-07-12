@@ -159,6 +159,8 @@ static int32_t source_component(rdp_combiner_source source,
     case RDP_COMBINER_ENVIRONMENT_ALPHA:return in->environment.a;
     case RDP_COMBINER_LOD_FRACTION:     return in->lod_fraction;
     case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: return in->primitive_lod_fraction;
+    case RDP_COMBINER_K4:               return in->k4;
+    case RDP_COMBINER_K5:               return in->k5;
     case RDP_COMBINER_ONE:              return 0x100;
     default:                            return 0;
     }
@@ -251,6 +253,8 @@ static void packet_source(uint16_t *restrict dst,
     case RDP_COMBINER_ENVIRONMENT_ALPHA: constant = state->environment_color.a; break;
     case RDP_COMBINER_LOD_FRACTION: src = packet->lod_fraction; break;
     case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: constant = state->primitive_lod_fraction; break;
+    case RDP_COMBINER_K4: constant = (uint16_t)state->convert_k4; break;
+    case RDP_COMBINER_K5: constant = (uint16_t)state->convert_k5; break;
     case RDP_COMBINER_ONE: constant = 0x100u; break;
     default: break;
     }

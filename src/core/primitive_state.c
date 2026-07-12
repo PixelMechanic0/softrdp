@@ -57,6 +57,11 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->texture.bilerp = registers->other_modes.bilerp0;
     primitive->texture.sample_quad = registers->other_modes.sample_quad;
     primitive->texture.mid_texel = registers->other_modes.mid_texel;
+    primitive->texture.convert_one = registers->other_modes.convert_one;
+    primitive->texture.convert_k0_tf = registers->convert_k0_tf;
+    primitive->texture.convert_k1_tf = registers->convert_k1_tf;
+    primitive->texture.convert_k2_tf = registers->convert_k2_tf;
+    primitive->texture.convert_k3_tf = registers->convert_k3_tf;
     primitive->fragment.depth.image_address = registers->depth_image_address;
     primitive->fragment.depth.primitive_depth = registers->primitive_depth;
     primitive->fragment.depth.compare = registers->other_modes.z_compare;
@@ -70,6 +75,8 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.needs_texel0 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL0) != 0;
     primitive->color.needs_texel1 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL1) != 0;
     primitive->color.needs_shade = (registers->combiner.input_mask & RDP_COMBINER_INPUT_SHADE) != 0;
+    primitive->color.convert_k4 = registers->convert_k4;
+    primitive->color.convert_k5 = registers->convert_k5;
     primitive->fragment.blend.program = registers->blender;
     primitive->fragment.blend.fog_color = registers->fog_color;
     primitive->fragment.blend.blend_color = registers->blend_color;

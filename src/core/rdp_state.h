@@ -165,6 +165,12 @@ typedef struct rdp_state {
     rdp_combiner_program combiner;
     rdp_blender_program blender;
     rdp_tile tiles[8];
+    int32_t convert_k0_tf;
+    int32_t convert_k1_tf;
+    int32_t convert_k2_tf;
+    int32_t convert_k3_tf;
+    int32_t convert_k4;
+    int32_t convert_k5;
 } rdp_state;
 
 /* Draw-local snapshots consumed by individual software pipeline stages. */
@@ -186,6 +192,11 @@ typedef struct rdp_texture_sample_state {
     bool bilerp;
     bool sample_quad;
     bool mid_texel;
+    bool convert_one;
+    int32_t convert_k0_tf;
+    int32_t convert_k1_tf;
+    int32_t convert_k2_tf;
+    int32_t convert_k3_tf;
 } rdp_texture_sample_state;
 
 typedef struct rdp_depth_state {
@@ -205,6 +216,8 @@ typedef struct rdp_color_pipeline_state {
     bool needs_texel0;
     bool needs_texel1;
     bool needs_shade;
+    int32_t convert_k4;
+    int32_t convert_k5;
 } rdp_color_pipeline_state;
 
 typedef struct rdp_blend_state {
