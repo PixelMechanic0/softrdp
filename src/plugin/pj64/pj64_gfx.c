@@ -32,6 +32,8 @@ static bool g_dump_requested = false;
 static bool g_record_active = false;
 static FILE* g_frame_dump_file = NULL;
 static uint32_t g_rdram_size = 0x400000;
+enum { FRAME_DUMP_PRESENT_COUNT = 4u };
+static uint32_t g_dump_presents_remaining = 0;
 
 static bool dump_write_all(FILE *file, const void *data, size_t size)
 {
@@ -711,6 +713,7 @@ void PJ64_CALL ProcessRDPList(void)
             g_dump_requested = false;
             g_record_active = true;
             g_recorded_lists_count = 0;
+            g_dump_presents_remaining = FRAME_DUMP_PRESENT_COUNT;
             
             g_frame_dump_file = fopen("frame_dump.bin", "wb");
             if (g_frame_dump_file) {
@@ -746,7 +749,8 @@ void PJ64_CALL ProcessRDPList(void)
                     g_record_active = false;
                 }
                 
-                pj64_log_printf("Starting frame dump recording (triggered by list)...");
+                pj64_log_printf("Starting frame dump recording for %u presented frames...",
+                                  FRAME_DUMP_PRESENT_COUNT);
             } else {
                 g_record_active = false;
                 pj64_log_printf("ERROR: Could not open frame_dump.bin for writing!");
@@ -878,7 +882,10 @@ void PJ64_CALL UpdateScreen(void)
     }
     sr_present_set_display_size(&g_present, g_display_width, g_display_height);
 
-    if (g_record_active) {
+    if (g_record_active && g_dump_presents_remaining > 0u)
+        g_dump_presents_remaining--;
+
+    if (g_record_active && g_dump_presents_remaining == 0u) {
         g_record_active = false;
         if (g_frame_dump_file) {
             // Write final reference RDRAM output
