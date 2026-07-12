@@ -27,6 +27,8 @@ typedef struct tmem_texel_address {
     uint8_t bytes;
 } tmem_texel_address;
 
+extern rdp_color tmem_rgba16_decode_table[UINT16_MAX + 1u];
+
 void tmem_init(tmem_state *tmem);
 sr_result tmem_load_tile(tmem_state *tmem, sr_memory *memory, const rdp_state *state, const rdp_command *cmd);
 
@@ -668,7 +670,7 @@ static inline bool tmem_fetch_rgba16_local(const tmem_state *tmem,
         address.byte + 1u >= SR_TMEM_SIZE) return false;
     const uint16_t texel = ((uint16_t)tmem->bytes[address.byte] << 8) |
                            (uint16_t)tmem->bytes[address.byte + 1u];
-    *color = pipeline_rgba5551_to_color(texel);
+    *color = tmem_rgba16_decode_table[texel];
     return true;
 }
 

@@ -5,9 +5,16 @@
 
 #include <string.h>
 
+rdp_color tmem_rgba16_decode_table[UINT16_MAX + 1u];
 
 void tmem_init(tmem_state *tmem)
 {
+    static bool decode_table_ready;
+    if (!decode_table_ready) {
+        for (uint32_t texel = 0; texel <= UINT16_MAX; texel++)
+            tmem_rgba16_decode_table[texel] = pipeline_rgba5551_to_color((uint16_t)texel);
+        decode_table_ready = true;
+    }
     memset(tmem, 0, sizeof(*tmem));
 }
 
