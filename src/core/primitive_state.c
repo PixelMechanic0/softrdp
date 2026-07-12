@@ -123,6 +123,14 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
                primitive->texture.tile.size == RDP_SIZE_8BPP &&
                primitive->texture.tlut_enable) {
         primitive->texture.sampler_class = RDP_SAMPLER_CI8_TLUT_BILERP;
+    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
+               primitive->texture.tile.format == RDP_FORMAT_I &&
+               primitive->texture.tile.size == RDP_SIZE_8BPP) {
+        primitive->texture.sampler_class = RDP_SAMPLER_I8_BILERP;
+    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
+               primitive->texture.tile.format == RDP_FORMAT_IA &&
+               primitive->texture.tile.size == RDP_SIZE_8BPP) {
+        primitive->texture.sampler_class = RDP_SAMPLER_IA8_BILERP;
     }
 }
 
@@ -157,7 +165,11 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
                 : primitive->texture.sampler_class == RDP_SAMPLER_I4_BILERP
                     ? RDP_BLOCK_SAMPLER_I4_BILERP
                     : primitive->texture.sampler_class == RDP_SAMPLER_CI8_TLUT_BILERP
-                        ? RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP : RDP_BLOCK_SAMPLER_GENERIC;
+                        ? RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP
+                        : primitive->texture.sampler_class == RDP_SAMPLER_I8_BILERP
+                            ? RDP_BLOCK_SAMPLER_I8_BILERP
+                            : primitive->texture.sampler_class == RDP_SAMPLER_IA8_BILERP
+                                ? RDP_BLOCK_SAMPLER_IA8_BILERP : RDP_BLOCK_SAMPLER_GENERIC;
     } else {
         plan->sampler = RDP_BLOCK_SAMPLER_NONE;
     }

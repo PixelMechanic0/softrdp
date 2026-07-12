@@ -185,7 +185,9 @@ typedef enum rdp_sampler_class {
     RDP_SAMPLER_RGBA16_POINT,
     RDP_SAMPLER_RGBA16_BILERP,
     RDP_SAMPLER_I4_BILERP,
-    RDP_SAMPLER_CI8_TLUT_BILERP
+    RDP_SAMPLER_CI8_TLUT_BILERP,
+    RDP_SAMPLER_I8_BILERP,
+    RDP_SAMPLER_IA8_BILERP
 } rdp_sampler_class;
 
 typedef struct rdp_texture_sample_state {
