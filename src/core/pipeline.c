@@ -318,7 +318,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     const int total = work->x_end - work->x_begin + 1;
 
     for (int offset = 0; offset < total; offset += (int)RDP_PACKET_LANES) {
-        pipeline_triangle_block block;
+        pipeline_triangle_block block = {0};
         const uint32_t count = (uint32_t)(total - offset) < RDP_PACKET_LANES
             ? (uint32_t)(total - offset) : RDP_PACKET_LANES;
         setup_triangle_block(primitive, &cursor, count, &block);
