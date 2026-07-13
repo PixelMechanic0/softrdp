@@ -96,8 +96,6 @@ typedef struct rdp_primitive_state rdp_primitive_state;
 struct rdp_primitive_state {
     rdp_framebuffer_state framebuffer;
     rdp_texture_sample_state texture;
-    rdp_texture_sample_state lod_textures[8];
-    rdp_texture_sample_state lod_textures_cycle1[8];
     uint8_t lod_base_tile;
     uint8_t lod_max_level;
     uint8_t lod_min_level;
@@ -111,6 +109,9 @@ struct rdp_primitive_state {
     rdp_block_plan block_plan;
     rdp_span_kernel_kind span_kernel;
     bool fill_mode;
+    /* Kept last so non-LOD primitives do not clear this large cold storage. */
+    rdp_texture_sample_state lod_textures[8];
+    rdp_texture_sample_state lod_textures_cycle1[8];
 };
 
 pipeline_outputs pipeline_combine_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs);

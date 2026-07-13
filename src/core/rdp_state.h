@@ -247,6 +247,7 @@ typedef struct rdp_color_pipeline_state {
     bool needs_texel0;
     bool needs_texel1;
     bool needs_shade;
+    bool needs_lod_fraction;
     int32_t convert_k4;
     int32_t convert_k5;
 } rdp_color_pipeline_state;

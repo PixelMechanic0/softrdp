@@ -30,30 +30,33 @@ static int32_t triangle_coord_fixed5(int32_t interpolated)
     return (int16_t)((uint32_t)interpolated >> 16);
 }
 
-static void perspective_divide_packet(const int32_t *restrict coord,
-                                      const int32_t *restrict w,
-                                      int32_t *restrict output,
-                                      uint32_t count)
+static void perspective_divide_pair_packet(const int32_t *restrict s,
+                                           const int32_t *restrict t,
+                                           const int32_t *restrict w,
+                                           int32_t *restrict output_s,
+                                           int32_t *restrict output_t,
+                                           bool *restrict lod_clamp,
+                                           uint32_t count)
 {
-    /* Keep this as one alias-free SoA loop: Clang/GCC can vectorize the
-     * independent binary64 divisions directly, while retaining a portable C
-     * implementation and handling arbitrary packet tails without SIMD reads. */
+    /* S and T share one reciprocal. Keeping this as an alias-free SoA loop
+     * lets the compiler vectorize it while avoiding two divisions per pair. */
     for (uint32_t lane = 0; lane < count; lane++) {
         if (w[lane] <= 0) {
-            output[lane] = 0x7fff;
+            output_s[lane] = output_t[lane] = 0x7fff;
+            if (lod_clamp) lod_clamp[lane] = true;
             continue;
         }
-        const double divided = ((double)coord[lane] * 32768.0) / (double)w[lane];
-        output[lane] = divided < -65536.0 ? -65536 :
-                       divided > 65535.0 ? 65535 : (int32_t)divided;
+        const double scale = 32768.0 / (double)w[lane];
+        const double divided_s = (double)s[lane] * scale;
+        const double divided_t = (double)t[lane] * scale;
+        if (lod_clamp && (divided_s < -65536.0 || divided_s > 65535.0 ||
+                          divided_t < -65536.0 || divided_t > 65535.0))
+            lod_clamp[lane] = true;
+        output_s[lane] = divided_s < -65536.0 ? -65536 :
+                         divided_s > 65535.0 ? 65535 : (int32_t)divided_s;
+        output_t[lane] = divided_t < -65536.0 ? -65536 :
+                         divided_t > 65535.0 ? 65535 : (int32_t)divided_t;
     }
-}
-
-static bool perspective_divide_clamps(int32_t coord, int32_t w)
-{
-    if (w <= 0) return true;
-    const double divided = ((double)coord * 32768.0) / (double)w;
-    return divided < -65536.0 || divided > 65535.0;
 }
 
 typedef struct rdp_lod_result {
@@ -389,9 +392,13 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
         }
 
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
+            const bool uses_lod = (primitive->block_plan.stages & RDP_BLOCK_STAGE_LOD) != 0u;
+            bool lod_clamp[RDP_PACKET_LANES] = { false };
             if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
-                perspective_divide_packet(block.s, block.w, block.sample_s, count);
-                perspective_divide_packet(block.t, block.w, block.sample_t, count);
+                bool *current_clamp = uses_lod && color_pipeline->cycle_type != RDP_CYCLE_1
+                    ? lod_clamp : NULL;
+                perspective_divide_pair_packet(block.s, block.t, block.w,
+                    block.sample_s, block.sample_t, current_clamp, count);
             } else {
                 for (uint32_t lane = 0; lane < count; lane++) {
                     block.sample_s[lane] = triangle_coord_fixed5(block.s[lane]);
@@ -402,8 +409,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             int32_t next_t[RDP_PACKET_LANES];
             int32_t next_y_s[RDP_PACKET_LANES];
             int32_t next_y_t[RDP_PACKET_LANES];
-            bool lod_clamp[RDP_PACKET_LANES] = { false };
-            if (primitive->block_plan.stages & RDP_BLOCK_STAGE_LOD) {
+            if (uses_lod) {
                 int32_t raw_s[RDP_PACKET_LANES], raw_t[RDP_PACKET_LANES];
                 int32_t raw_y_s[RDP_PACKET_LANES], raw_y_t[RDP_PACKET_LANES];
                 int32_t raw_w[RDP_PACKET_LANES], raw_y_w[RDP_PACKET_LANES];
@@ -423,27 +429,12 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                         raw_y_t[lane] = (int32_t)((uint32_t)block.t[lane] + (uint32_t)decoded->texture.dtdy);
                         raw_y_w[lane] = (int32_t)((uint32_t)block.w[lane] + (uint32_t)decoded->texture.dwdy);
                     }
-                    if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
-                        if (color_pipeline->cycle_type == RDP_CYCLE_1) {
-                            lod_clamp[lane] = perspective_divide_clamps(raw_s[lane], raw_w[lane]) ||
-                                perspective_divide_clamps(raw_t[lane], raw_w[lane]) ||
-                                perspective_divide_clamps(raw_y_s[lane], raw_y_w[lane]) ||
-                                perspective_divide_clamps(raw_y_t[lane], raw_y_w[lane]);
-                        } else {
-                            lod_clamp[lane] = perspective_divide_clamps(block.s[lane], block.w[lane]) ||
-                                perspective_divide_clamps(block.t[lane], block.w[lane]) ||
-                                perspective_divide_clamps(raw_s[lane], raw_w[lane]) ||
-                                perspective_divide_clamps(raw_t[lane], raw_w[lane]) ||
-                                perspective_divide_clamps(raw_y_s[lane], raw_y_w[lane]) ||
-                                perspective_divide_clamps(raw_y_t[lane], raw_y_w[lane]);
-                        }
-                    }
                 }
                 if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
-                    perspective_divide_packet(raw_s, raw_w, next_s, count);
-                    perspective_divide_packet(raw_t, raw_w, next_t, count);
-                    perspective_divide_packet(raw_y_s, raw_y_w, next_y_s, count);
-                    perspective_divide_packet(raw_y_t, raw_y_w, next_y_t, count);
+                    perspective_divide_pair_packet(raw_s, raw_t, raw_w,
+                        next_s, next_t, lod_clamp, count);
+                    perspective_divide_pair_packet(raw_y_s, raw_y_t, raw_y_w,
+                        next_y_s, next_y_t, lod_clamp, count);
                 } else {
                     for (uint32_t lane = 0; lane < count; lane++) {
                         next_s[lane] = triangle_coord_fixed5(raw_s[lane]);
@@ -459,7 +450,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 const int32_t s = block.sample_s[lane], t = block.sample_t[lane];
                 const rdp_texture_sample_state *texture0 = texture;
                 const rdp_texture_sample_state *texture1 = texture;
-                if (primitive->block_plan.stages & RDP_BLOCK_STAGE_LOD) {
+                if (uses_lod) {
                     const rdp_lod_result lod = color_pipeline->cycle_type == RDP_CYCLE_1
                         ? resolve_lod(primitive, next_s[lane], next_t[lane],
                             next_y_s[lane], next_y_t[lane], next_s[lane], next_t[lane],

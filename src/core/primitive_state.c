@@ -2,7 +2,27 @@
 
 #include "tmem.h"
 
+#include <stddef.h>
 #include <string.h>
+
+static uint8_t pipeline_combiner_cycle_mask(const rdp_combiner_cycle *cycle)
+{
+    uint8_t mask = 0u;
+    const uint8_t *sources = (const uint8_t *)cycle;
+    for (uint32_t i = 0; i < sizeof(*cycle); i++) {
+        switch ((rdp_combiner_source)sources[i]) {
+        case RDP_COMBINER_TEXEL0_RGB:
+        case RDP_COMBINER_TEXEL0_ALPHA: mask |= RDP_COMBINER_INPUT_TEXEL0; break;
+        case RDP_COMBINER_TEXEL1_RGB:
+        case RDP_COMBINER_TEXEL1_ALPHA: mask |= RDP_COMBINER_INPUT_TEXEL1; break;
+        case RDP_COMBINER_SHADE_RGB:
+        case RDP_COMBINER_SHADE_ALPHA: mask |= RDP_COMBINER_INPUT_SHADE; break;
+        case RDP_COMBINER_LOD_FRACTION: mask |= RDP_COMBINER_INPUT_LOD_FRACTION; break;
+        default: break;
+        }
+    }
+    return mask;
+}
 
 static uint16_t compile_depth_delta(const rdp_depth_state *depth,
                                     const raster_decoded_triangle *triangle)
@@ -122,7 +142,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
                                     const tmem_state *tmem,
                                     uint32_t tile_index)
 {
-    memset(primitive, 0, sizeof(*primitive));
+    memset(primitive, 0, offsetof(rdp_primitive_state, lod_textures));
     pipeline_compile_framebuffer(&primitive->framebuffer, registers);
     pipeline_compile_texture(&primitive->texture, registers, tmem, tile_index, false);
     primitive->lod_base_tile = primitive->texture.tile_index;
@@ -143,9 +163,14 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.cycle_type = registers->other_modes.cycle_type;
     primitive->color.two_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2;
     primitive->color.primitive_lod_fraction = registers->primitive_lod_fraction;
-    primitive->color.needs_texel0 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL0) != 0;
-    primitive->color.needs_texel1 = (registers->combiner.input_mask & RDP_COMBINER_INPUT_TEXEL1) != 0;
-    primitive->color.needs_shade = (registers->combiner.input_mask & RDP_COMBINER_INPUT_SHADE) != 0;
+    uint8_t active_combiner_inputs = pipeline_combiner_cycle_mask(&registers->combiner.cycle[1]);
+    if (primitive->color.two_cycle)
+        active_combiner_inputs |= pipeline_combiner_cycle_mask(&registers->combiner.cycle[0]);
+    primitive->color.needs_texel0 = (active_combiner_inputs & RDP_COMBINER_INPUT_TEXEL0) != 0;
+    primitive->color.needs_texel1 = (active_combiner_inputs & RDP_COMBINER_INPUT_TEXEL1) != 0;
+    primitive->color.needs_shade = (active_combiner_inputs & RDP_COMBINER_INPUT_SHADE) != 0;
+    primitive->color.needs_lod_fraction =
+        (active_combiner_inputs & RDP_COMBINER_INPUT_LOD_FRACTION) != 0;
     primitive->color.convert_k4 = registers->convert_k4;
     primitive->color.convert_k5 = registers->convert_k5;
     primitive->fragment.blend.program = registers->blender;
@@ -192,7 +217,7 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
         (primitive->fragment.blend.input_mask & RDP_BLENDER_INPUT_SHADE_ALPHA)))
         plan->stages |= RDP_BLOCK_STAGE_SHADE;
     if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1 ||
-                        (primitive->color.program.input_mask & RDP_COMBINER_INPUT_LOD_FRACTION))) {
+                        primitive->color.needs_lod_fraction)) {
         plan->stages |= RDP_BLOCK_STAGE_TEXTURE;
         plan->sampler = primitive->texture.sampler_class == RDP_SAMPLER_RGBA16_BILERP
             ? RDP_BLOCK_SAMPLER_RGBA16_BILERP
@@ -211,7 +236,7 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
     }
     if ((plan->stages & RDP_BLOCK_STAGE_TEXTURE) &&
         (primitive->texture_lod || primitive->sharpen_lod || primitive->detail_lod ||
-         (primitive->color.program.input_mask & RDP_COMBINER_INPUT_LOD_FRACTION)))
+         primitive->color.needs_lod_fraction))
         plan->stages |= RDP_BLOCK_STAGE_LOD;
     if (primitive->fragment.blend.force_blend || primitive->fragment.blend.image_read)
         plan->stages |= RDP_BLOCK_STAGE_BLEND;
@@ -239,11 +264,17 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
     primitive->lod_max_level = triangle->position.max_level;
     if (triangle->has_texture && (primitive->texture_lod || primitive->sharpen_lod ||
                                   primitive->detail_lod ||
-                                  (primitive->color.program.input_mask & RDP_COMBINER_INPUT_LOD_FRACTION))) {
-        for (uint32_t tile = 0; tile < 8u; tile++)
-            pipeline_compile_texture(&primitive->lod_textures[tile], registers, tmem, tile, false);
-        for (uint32_t tile = 0; tile < 8u; tile++)
-            pipeline_compile_texture(&primitive->lod_textures_cycle1[tile], registers, tmem, tile, true);
+                                  primitive->color.needs_lod_fraction)) {
+        uint32_t tile_count = primitive->texture_lod
+            ? (uint32_t)primitive->lod_max_level + 2u : 1u;
+        if (tile_count > 8u) tile_count = 8u;
+        for (uint32_t offset = 0; offset < tile_count; offset++) {
+            const uint32_t tile = (primitive->lod_base_tile + offset) & 7u;
+            if (primitive->color.needs_texel0)
+                pipeline_compile_texture(&primitive->lod_textures[tile], registers, tmem, tile, false);
+            if (primitive->color.needs_texel1)
+                pipeline_compile_texture(&primitive->lod_textures_cycle1[tile], registers, tmem, tile, true);
+        }
     }
     primitive->fragment.depth.pixel_delta = compile_depth_delta(
         &primitive->fragment.depth, triangle);
