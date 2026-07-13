@@ -50,6 +50,7 @@ typedef struct raster_triangle_setup {
     int16_t yh, ym, yl;
     int32_t dxhdy, dxmdy, dxldy;
     uint8_t tile;
+    uint8_t max_level;
     bool flip;
 } raster_triangle_setup;
 

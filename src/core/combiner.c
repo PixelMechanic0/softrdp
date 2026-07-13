@@ -81,6 +81,7 @@ static uint8_t source_mask(rdp_combiner_source source)
     case RDP_COMBINER_TEXEL1_ALPHA: return RDP_COMBINER_INPUT_TEXEL1;
     case RDP_COMBINER_SHADE_RGB:
     case RDP_COMBINER_SHADE_ALPHA:  return RDP_COMBINER_INPUT_SHADE;
+    case RDP_COMBINER_LOD_FRACTION: return RDP_COMBINER_INPUT_LOD_FRACTION;
     default:                        return 0u;
     }
 }
@@ -396,7 +397,7 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
                         (uint8_t)packet->texel1[2][lane], (uint8_t)packet->texel1[3][lane] },
             .primitive = state->primitive_color,
             .environment = state->environment_color,
-            .lod_fraction = (uint8_t)packet->lod_fraction[lane],
+            .lod_fraction = packet->lod_fraction[lane],
             .primitive_lod_fraction = state->primitive_lod_fraction,
             .k4 = (uint16_t)state->convert_k4,
             .k5 = (uint16_t)state->convert_k5

@@ -219,7 +219,7 @@ sr_result rdp_decode_command(rdp_command *cmd)
     case RDP_CMD_SET_FOG_COLOR:                   cmd->decoded.set_fog_color.color = color_from_word(w1); return SR_OK;
     case RDP_CMD_SET_BLEND_COLOR:                 cmd->decoded.set_blend_color.color = color_from_word(w1); return SR_OK;
     case RDP_CMD_SET_ENV_COLOR:                   cmd->decoded.set_env_color.color = color_from_word(w1); return SR_OK;
-    case RDP_CMD_SET_PRIM_COLOR:                  cmd->decoded.set_prim_color.min_lod = (uint8_t)((w0 >> 8) & 0xffu); cmd->decoded.set_prim_color.lod_fraction = (uint8_t)(w0 & 0xffu); cmd->decoded.set_prim_color.color = color_from_word(w1); return SR_OK;
+    case RDP_CMD_SET_PRIM_COLOR:                  cmd->decoded.set_prim_color.min_lod = (uint8_t)((w0 >> 8) & 0x1fu); cmd->decoded.set_prim_color.lod_fraction = (uint8_t)(w0 & 0xffu); cmd->decoded.set_prim_color.color = color_from_word(w1); return SR_OK;
     case RDP_CMD_SET_PRIM_DEPTH:                  cmd->decoded.set_prim_depth.depth = (uint16_t)(w1 >> 16); cmd->decoded.set_prim_depth.delta_z = (uint16_t)w1; return SR_OK;
     case RDP_CMD_SET_COMBINE:                     decode_set_combine(&cmd->decoded.set_combine, w0, w1); return SR_OK;
 

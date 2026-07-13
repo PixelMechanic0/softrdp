@@ -66,6 +66,57 @@ void pipeline_compile_framebuffer(rdp_framebuffer_state *framebuffer,
                                    registers->color_image.size == RDP_SIZE_16BPP ? 2u : 1u;
 }
 
+static void pipeline_compile_texture(rdp_texture_sample_state *texture,
+                                     const rdp_state *registers,
+                                     const tmem_state *tmem,
+                                     uint32_t tile_index,
+                                     bool second_cycle)
+{
+    memset(texture, 0, sizeof(*texture));
+    texture->tile_index = (uint8_t)(tile_index & 7u);
+    texture->tile = registers->tiles[texture->tile_index];
+    texture->perspective = registers->other_modes.perspective;
+    texture->tlut_enable = registers->other_modes.tlut_enable;
+    texture->tlut_ia = registers->other_modes.tlut_ia;
+    texture->bilerp = second_cycle ? registers->other_modes.bilerp1
+                                   : registers->other_modes.bilerp0;
+    texture->sample_quad = registers->other_modes.sample_quad;
+    texture->mid_texel = registers->other_modes.mid_texel;
+    texture->convert_one = registers->other_modes.convert_one;
+    texture->convert_k0_tf = registers->convert_k0_tf;
+    texture->convert_k1_tf = registers->convert_k1_tf;
+    texture->convert_k2_tf = registers->convert_k2_tf;
+    texture->convert_k3_tf = registers->convert_k3_tf;
+    pipeline_resolve_tile_bounds(registers, tmem, texture->tile_index, &texture->bounds);
+    uint32_t texture_width;
+    uint32_t texture_height;
+    uint32_t texture_stride;
+    if (tmem_tile_sample_layout(tmem, texture, &texture_width,
+                                &texture_height, &texture_stride)) {
+        texture->width = (uint16_t)texture_width;
+        texture->height = (uint16_t)texture_height;
+        texture->stride = (uint16_t)texture_stride;
+    }
+    if (texture->tile.format == RDP_FORMAT_RGBA &&
+        texture->tile.size == RDP_SIZE_16BPP && !texture->tlut_enable) {
+        texture->sampler_class = texture->bilerp && texture->sample_quad
+            ? RDP_SAMPLER_RGBA16_BILERP : RDP_SAMPLER_RGBA16_POINT;
+    } else if (texture->bilerp && texture->sample_quad &&
+               texture->tile.format == RDP_FORMAT_I && texture->tile.size == RDP_SIZE_4BPP) {
+        texture->sampler_class = RDP_SAMPLER_I4_BILERP;
+    } else if (texture->bilerp && texture->sample_quad &&
+               texture->tile.format == RDP_FORMAT_CI && texture->tile.size == RDP_SIZE_8BPP &&
+               texture->tlut_enable) {
+        texture->sampler_class = RDP_SAMPLER_CI8_TLUT_BILERP;
+    } else if (texture->bilerp && texture->sample_quad &&
+               texture->tile.format == RDP_FORMAT_I && texture->tile.size == RDP_SIZE_8BPP) {
+        texture->sampler_class = RDP_SAMPLER_I8_BILERP;
+    } else if (texture->bilerp && texture->sample_quad &&
+               texture->tile.format == RDP_FORMAT_IA && texture->tile.size == RDP_SIZE_8BPP) {
+        texture->sampler_class = RDP_SAMPLER_IA8_BILERP;
+    }
+}
+
 static void pipeline_compile_common(rdp_primitive_state *primitive,
                                     const rdp_state *registers,
                                     const tmem_state *tmem,
@@ -73,19 +124,12 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
 {
     memset(primitive, 0, sizeof(*primitive));
     pipeline_compile_framebuffer(&primitive->framebuffer, registers);
-    primitive->texture.tile_index = (uint8_t)(tile_index & 7u);
-    primitive->texture.tile = registers->tiles[primitive->texture.tile_index];
-    primitive->texture.perspective = registers->other_modes.perspective;
-    primitive->texture.tlut_enable = registers->other_modes.tlut_enable;
-    primitive->texture.tlut_ia = registers->other_modes.tlut_ia;
-    primitive->texture.bilerp = registers->other_modes.bilerp0;
-    primitive->texture.sample_quad = registers->other_modes.sample_quad;
-    primitive->texture.mid_texel = registers->other_modes.mid_texel;
-    primitive->texture.convert_one = registers->other_modes.convert_one;
-    primitive->texture.convert_k0_tf = registers->convert_k0_tf;
-    primitive->texture.convert_k1_tf = registers->convert_k1_tf;
-    primitive->texture.convert_k2_tf = registers->convert_k2_tf;
-    primitive->texture.convert_k3_tf = registers->convert_k3_tf;
+    pipeline_compile_texture(&primitive->texture, registers, tmem, tile_index, false);
+    primitive->lod_base_tile = primitive->texture.tile_index;
+    primitive->lod_min_level = registers->primitive_min_lod & 0x1fu;
+    primitive->texture_lod = registers->other_modes.texture_lod;
+    primitive->sharpen_lod = registers->other_modes.sharpen_lod;
+    primitive->detail_lod = registers->other_modes.detail_lod;
     primitive->fragment.depth.image_address = registers->depth_image_address;
     primitive->fragment.depth.primitive_depth = registers->primitive_depth;
     primitive->fragment.depth.primitive_delta_z = registers->primitive_delta_z;
@@ -122,45 +166,6 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
     primitive->fragment.rgb_dither = registers->other_modes.rgb_dither;
     primitive->tmem = tmem;
-    pipeline_resolve_tile_bounds(registers,
-                                 tmem,
-                                 primitive->texture.tile_index,
-                                 &primitive->texture.bounds);
-    uint32_t texture_width;
-    uint32_t texture_height;
-    uint32_t texture_stride;
-    if (tmem_tile_sample_layout(tmem,
-                                &primitive->texture,
-                                &texture_width,
-                                &texture_height,
-                                &texture_stride)) {
-        primitive->texture.width = (uint16_t)texture_width;
-        primitive->texture.height = (uint16_t)texture_height;
-        primitive->texture.stride = (uint16_t)texture_stride;
-    }
-    if (primitive->texture.tile.format == RDP_FORMAT_RGBA &&
-        primitive->texture.tile.size == RDP_SIZE_16BPP &&
-        !primitive->texture.tlut_enable) {
-        primitive->texture.sampler_class = primitive->texture.bilerp && primitive->texture.sample_quad
-            ? RDP_SAMPLER_RGBA16_BILERP : RDP_SAMPLER_RGBA16_POINT;
-    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
-               primitive->texture.tile.format == RDP_FORMAT_I &&
-               primitive->texture.tile.size == RDP_SIZE_4BPP) {
-        primitive->texture.sampler_class = RDP_SAMPLER_I4_BILERP;
-    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
-               primitive->texture.tile.format == RDP_FORMAT_CI &&
-               primitive->texture.tile.size == RDP_SIZE_8BPP &&
-               primitive->texture.tlut_enable) {
-        primitive->texture.sampler_class = RDP_SAMPLER_CI8_TLUT_BILERP;
-    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
-               primitive->texture.tile.format == RDP_FORMAT_I &&
-               primitive->texture.tile.size == RDP_SIZE_8BPP) {
-        primitive->texture.sampler_class = RDP_SAMPLER_I8_BILERP;
-    } else if (primitive->texture.bilerp && primitive->texture.sample_quad &&
-               primitive->texture.tile.format == RDP_FORMAT_IA &&
-               primitive->texture.tile.size == RDP_SIZE_8BPP) {
-        primitive->texture.sampler_class = RDP_SAMPLER_IA8_BILERP;
-    }
 }
 
 static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
@@ -186,7 +191,8 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
     if (has_shade && (primitive->color.needs_shade ||
         (primitive->fragment.blend.input_mask & RDP_BLENDER_INPUT_SHADE_ALPHA)))
         plan->stages |= RDP_BLOCK_STAGE_SHADE;
-    if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1)) {
+    if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1 ||
+                        (primitive->color.program.input_mask & RDP_COMBINER_INPUT_LOD_FRACTION))) {
         plan->stages |= RDP_BLOCK_STAGE_TEXTURE;
         plan->sampler = primitive->texture.sampler_class == RDP_SAMPLER_RGBA16_BILERP
             ? RDP_BLOCK_SAMPLER_RGBA16_BILERP
@@ -203,6 +209,10 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
     } else {
         plan->sampler = RDP_BLOCK_SAMPLER_NONE;
     }
+    if ((plan->stages & RDP_BLOCK_STAGE_TEXTURE) &&
+        (primitive->texture_lod || primitive->sharpen_lod || primitive->detail_lod ||
+         (primitive->color.program.input_mask & RDP_COMBINER_INPUT_LOD_FRACTION)))
+        plan->stages |= RDP_BLOCK_STAGE_LOD;
     if (primitive->fragment.blend.force_blend || primitive->fragment.blend.image_read)
         plan->stages |= RDP_BLOCK_STAGE_BLEND;
     if (primitive->fragment.blend.alpha_compare)
@@ -226,6 +236,15 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
                             tmem,
                             triangle->position.tile);
     primitive->triangle = *triangle;
+    primitive->lod_max_level = triangle->position.max_level;
+    if (triangle->has_texture && (primitive->texture_lod || primitive->sharpen_lod ||
+                                  primitive->detail_lod ||
+                                  (primitive->color.program.input_mask & RDP_COMBINER_INPUT_LOD_FRACTION))) {
+        for (uint32_t tile = 0; tile < 8u; tile++)
+            pipeline_compile_texture(&primitive->lod_textures[tile], registers, tmem, tile, false);
+        for (uint32_t tile = 0; tile < 8u; tile++)
+            pipeline_compile_texture(&primitive->lod_textures_cycle1[tile], registers, tmem, tile, true);
+    }
     primitive->fragment.depth.pixel_delta = compile_depth_delta(
         &primitive->fragment.depth, triangle);
     primitive->fill_mode = fill_mode;

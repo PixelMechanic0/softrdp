@@ -121,7 +121,8 @@ typedef struct rdp_combiner_cycle {
 enum {
     RDP_COMBINER_INPUT_TEXEL0 = 1u << 0,
     RDP_COMBINER_INPUT_TEXEL1 = 1u << 1,
-    RDP_COMBINER_INPUT_SHADE = 1u << 2
+    RDP_COMBINER_INPUT_SHADE = 1u << 2,
+    RDP_COMBINER_INPUT_LOD_FRACTION = 1u << 3
 };
 
 typedef struct rdp_combiner_program {

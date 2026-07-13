@@ -49,6 +49,122 @@ static void perspective_divide_packet(const int32_t *restrict coord,
     }
 }
 
+static bool perspective_divide_clamps(int32_t coord, int32_t w)
+{
+    if (w <= 0) return true;
+    const double divided = ((double)coord * 32768.0) / (double)w;
+    return divided < -65536.0 || divided > 65535.0;
+}
+
+typedef struct rdp_lod_result {
+    uint16_t fraction;
+    uint8_t tile0;
+    uint8_t tile1;
+} rdp_lod_result;
+
+static int32_t sign_extend_17(int32_t value)
+{
+    const uint32_t bits = (uint32_t)value & 0x1ffffu;
+    return (int32_t)((bits ^ 0x10000u) - 0x10000u);
+}
+
+static uint32_t lod_delta(int32_t scurr, int32_t snext,
+                          int32_t tcurr, int32_t tnext,
+                          uint32_t previous)
+{
+    int32_t ds = sign_extend_17(snext) - sign_extend_17(scurr);
+    int32_t dt = sign_extend_17(tnext) - sign_extend_17(tcurr);
+    if (((uint32_t)ds & 0x20000u) != 0u) ds = (int32_t)(~ds & 0x1ffff);
+    if (((uint32_t)dt & 0x20000u) != 0u) dt = (int32_t)(~dt & 0x1ffff);
+    uint32_t delta = (uint32_t)(ds > dt ? ds : dt);
+    if (previous > delta) delta = previous;
+    uint32_t lod = delta & 0x7fffu;
+    if (delta & 0x1c000u) lod |= 0x4000u;
+    return lod;
+}
+
+static uint32_t lod_log2_level(uint32_t value)
+{
+    uint32_t level = 0u;
+    while (value >>= 1u) level++;
+    return level;
+}
+
+static rdp_lod_result resolve_lod(const rdp_primitive_state *primitive,
+                                  int32_t s, int32_t t,
+                                  int32_t sx, int32_t tx,
+                                  int32_t sy, int32_t ty,
+                                  bool lod_clamp)
+{
+    uint32_t lod = 0u;
+    if (!lod_clamp) {
+        lod = lod_delta(s, sx, t, tx, 0u);
+        lod = lod_delta(s, sy, t, ty, lod);
+    }
+
+    uint32_t level = 0u;
+    bool magnify;
+    bool distant;
+    uint16_t fraction;
+    if ((lod & 0x4000u) || lod_clamp) {
+        magnify = false;
+        distant = true;
+        fraction = 0xffu;
+    } else if (lod < primitive->lod_min_level) {
+        magnify = true;
+        distant = primitive->lod_max_level == 0u;
+        if (!primitive->sharpen_lod && !primitive->detail_lod)
+            fraction = distant ? 0xffu : 0u;
+        else {
+            fraction = (uint16_t)(primitive->lod_min_level << 3);
+            if (primitive->sharpen_lod) fraction |= 0x100u;
+        }
+    } else if (lod < 32u) {
+        magnify = true;
+        distant = primitive->lod_max_level == 0u;
+        if (!primitive->sharpen_lod && !primitive->detail_lod)
+            fraction = distant ? 0xffu : 0u;
+        else {
+            fraction = (uint16_t)(lod << 3);
+            if (primitive->sharpen_lod) fraction |= 0x100u;
+        }
+    } else {
+        magnify = false;
+        level = lod_log2_level((lod >> 5) & 0xffu);
+        distant = primitive->lod_max_level
+            ? ((lod & 0x6000u) != 0u || level >= primitive->lod_max_level)
+            : true;
+        fraction = (!primitive->sharpen_lod && !primitive->detail_lod && distant)
+            ? 0xffu : (uint16_t)(((lod << 3) >> level) & 0xffu);
+    }
+
+    uint8_t tile0 = primitive->lod_base_tile;
+    uint8_t tile1 = tile0;
+    if (primitive->texture_lod) {
+        if (distant) level = primitive->lod_max_level;
+        if (!primitive->detail_lod) {
+            tile0 = (uint8_t)((primitive->lod_base_tile + level) & 7u);
+            tile1 = (distant || (!primitive->sharpen_lod && magnify))
+                ? tile0 : (uint8_t)((tile0 + 1u) & 7u);
+        } else {
+            tile0 = (uint8_t)((primitive->lod_base_tile + level +
+                               (magnify ? 0u : 1u)) & 7u);
+            tile1 = (uint8_t)((primitive->lod_base_tile + level +
+                               (!distant && !magnify ? 2u : 1u)) & 7u);
+        }
+    }
+    return (rdp_lod_result){ fraction, tile0, tile1 };
+}
+
+static void store_texel(uint16_t destination[4][RDP_PACKET_LANES],
+                        uint32_t lane, rdp_color texel)
+{
+    destination[0][lane] = texel.r;
+    destination[1][lane] = texel.g;
+    destination[2][lane] = texel.b;
+    destination[3][lane] = texel.a;
+}
+
 typedef struct rdp_depth_result {
     bool pass;
     bool update;
@@ -282,19 +398,90 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     block.sample_t[lane] = triangle_coord_fixed5(block.t[lane]);
                 }
             }
+            int32_t next_s[RDP_PACKET_LANES];
+            int32_t next_t[RDP_PACKET_LANES];
+            int32_t next_y_s[RDP_PACKET_LANES];
+            int32_t next_y_t[RDP_PACKET_LANES];
+            bool lod_clamp[RDP_PACKET_LANES] = { false };
+            if (primitive->block_plan.stages & RDP_BLOCK_STAGE_LOD) {
+                int32_t raw_s[RDP_PACKET_LANES], raw_t[RDP_PACKET_LANES];
+                int32_t raw_y_s[RDP_PACKET_LANES], raw_y_t[RDP_PACKET_LANES];
+                int32_t raw_w[RDP_PACKET_LANES], raw_y_w[RDP_PACKET_LANES];
+                for (uint32_t lane = 0; lane < count; lane++) {
+                    raw_s[lane] = (int32_t)((uint32_t)block.s[lane] + (uint32_t)decoded->texture.dsdx);
+                    raw_t[lane] = (int32_t)((uint32_t)block.t[lane] + (uint32_t)decoded->texture.dtdx);
+                    raw_w[lane] = (int32_t)((uint32_t)block.w[lane] + (uint32_t)decoded->texture.dwdx);
+                    if (color_pipeline->cycle_type == RDP_CYCLE_1) {
+                        raw_y_s[lane] = (int32_t)((uint32_t)block.s[lane] +
+                            2u * (uint32_t)decoded->texture.dsdx);
+                        raw_y_t[lane] = (int32_t)((uint32_t)block.t[lane] +
+                            2u * (uint32_t)decoded->texture.dtdx);
+                        raw_y_w[lane] = (int32_t)((uint32_t)block.w[lane] +
+                            2u * (uint32_t)decoded->texture.dwdx);
+                    } else {
+                        raw_y_s[lane] = (int32_t)((uint32_t)block.s[lane] + (uint32_t)decoded->texture.dsdy);
+                        raw_y_t[lane] = (int32_t)((uint32_t)block.t[lane] + (uint32_t)decoded->texture.dtdy);
+                        raw_y_w[lane] = (int32_t)((uint32_t)block.w[lane] + (uint32_t)decoded->texture.dwdy);
+                    }
+                    if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
+                        if (color_pipeline->cycle_type == RDP_CYCLE_1) {
+                            lod_clamp[lane] = perspective_divide_clamps(raw_s[lane], raw_w[lane]) ||
+                                perspective_divide_clamps(raw_t[lane], raw_w[lane]) ||
+                                perspective_divide_clamps(raw_y_s[lane], raw_y_w[lane]) ||
+                                perspective_divide_clamps(raw_y_t[lane], raw_y_w[lane]);
+                        } else {
+                            lod_clamp[lane] = perspective_divide_clamps(block.s[lane], block.w[lane]) ||
+                                perspective_divide_clamps(block.t[lane], block.w[lane]) ||
+                                perspective_divide_clamps(raw_s[lane], raw_w[lane]) ||
+                                perspective_divide_clamps(raw_t[lane], raw_w[lane]) ||
+                                perspective_divide_clamps(raw_y_s[lane], raw_y_w[lane]) ||
+                                perspective_divide_clamps(raw_y_t[lane], raw_y_w[lane]);
+                        }
+                    }
+                }
+                if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
+                    perspective_divide_packet(raw_s, raw_w, next_s, count);
+                    perspective_divide_packet(raw_t, raw_w, next_t, count);
+                    perspective_divide_packet(raw_y_s, raw_y_w, next_y_s, count);
+                    perspective_divide_packet(raw_y_t, raw_y_w, next_y_t, count);
+                } else {
+                    for (uint32_t lane = 0; lane < count; lane++) {
+                        next_s[lane] = triangle_coord_fixed5(raw_s[lane]);
+                        next_t[lane] = triangle_coord_fixed5(raw_t[lane]);
+                        next_y_s[lane] = triangle_coord_fixed5(raw_y_s[lane]);
+                        next_y_t[lane] = triangle_coord_fixed5(raw_y_t[lane]);
+                    }
+                }
+            }
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
                 if (!(block.active_mask & bit)) continue;
-                const int32_t s = block.sample_s[lane];
-                const int32_t t = block.sample_t[lane];
-                rdp_color texel;
-                if (tmem_sample_color_fixed5(tmem, texture, s, t, &texel)) {
-                    block.texel0[0][lane] = texel.r;
-                    block.texel0[1][lane] = texel.g;
-                    block.texel0[2][lane] = texel.b;
-                    block.texel0[3][lane] = texel.a;
-                    for (uint32_t component = 0; component < 4u; component++)
-                        block.texel1[component][lane] = block.texel0[component][lane];
+                const int32_t s = block.sample_s[lane], t = block.sample_t[lane];
+                const rdp_texture_sample_state *texture0 = texture;
+                const rdp_texture_sample_state *texture1 = texture;
+                if (primitive->block_plan.stages & RDP_BLOCK_STAGE_LOD) {
+                    const rdp_lod_result lod = color_pipeline->cycle_type == RDP_CYCLE_1
+                        ? resolve_lod(primitive, next_s[lane], next_t[lane],
+                            next_y_s[lane], next_y_t[lane], next_s[lane], next_t[lane],
+                            lod_clamp[lane])
+                        : resolve_lod(primitive, s, t, next_s[lane], next_t[lane],
+                            next_y_s[lane], next_y_t[lane], lod_clamp[lane]);
+                    block.lod_fraction[lane] = lod.fraction;
+                    texture0 = &primitive->lod_textures[lod.tile0];
+                    texture1 = &primitive->lod_textures_cycle1[lod.tile1];
+                }
+                rdp_color texel0, texel1;
+                const bool ok0 = !color_pipeline->needs_texel0 ||
+                    tmem_sample_color_fixed5(tmem, texture0, s, t, &texel0);
+                const bool ok1 = !color_pipeline->needs_texel1 ||
+                    tmem_sample_color_fixed5(tmem, texture1, s, t, &texel1);
+                if (ok0 && ok1) {
+                    if (color_pipeline->needs_texel0) store_texel(block.texel0, lane, texel0);
+                    if (color_pipeline->needs_texel1) store_texel(block.texel1, lane, texel1);
+                    if (!color_pipeline->needs_texel1 && color_pipeline->needs_texel0)
+                        store_texel(block.texel1, lane, texel0);
+                    if (!color_pipeline->needs_texel0 && color_pipeline->needs_texel1)
+                        store_texel(block.texel0, lane, texel1);
                 } else if (decoded->has_shade) {
                     block.fallback_mask |= bit;
                 } else {

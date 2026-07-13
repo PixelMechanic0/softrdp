@@ -18,7 +18,8 @@ static raster_triangle_setup decode_triangle_setup(const rdp_command *cmd)
     raster_triangle_setup setup;
 
     setup.flip = (w[0] & 0x00800000u) != 0;
-    setup.tile = (uint8_t)((w[0] >> 16) & 0x3fu);
+    setup.tile = (uint8_t)((w[0] >> 16) & 7u);
+    setup.max_level = (uint8_t)((w[0] >> 19) & 7u);
     setup.yl = (int16_t)sign_extend(w[0] & 0x3fffu, 14);
     setup.ym = (int16_t)sign_extend((w[1] >> 16) & 0x3fffu, 14);
     setup.yh = (int16_t)sign_extend(w[1] & 0x3fffu, 14);

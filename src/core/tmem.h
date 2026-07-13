@@ -170,14 +170,23 @@ static inline bool tmem_resolve_rgba32_address_raw(const rdp_tile *tile,
 
 static inline bool tmem_tile_extent_from_descriptor(const rdp_tile *tile, uint32_t *width, uint32_t *height)
 {
-    if (!tile || !width || !height || tile->sh < tile->sl || tile->th < tile->tl ||
-        (tile->sh == tile->sl && tile->th == tile->tl)) {
+    if (!tile || !width || !height || tile->sh < tile->sl || tile->th < tile->tl) {
         return false;
     }
 
     *width = (tile->sh >> 2) - (tile->sl >> 2) + 1u;
     *height = (tile->th >> 2) - (tile->tl >> 2) + 1u;
     return *width != 0 && *height != 0;
+}
+
+static inline uint32_t tmem_derived_row_stride(const rdp_tile *tile, uint32_t width)
+{
+    const uint32_t bytes_per_texel = tile->size == RDP_SIZE_32BPP ? 4u :
+                                     tile->size == RDP_SIZE_16BPP ? 2u :
+                                     tile->size == RDP_SIZE_8BPP ? 1u : 0u;
+    const uint32_t row_bytes = bytes_per_texel ? width * bytes_per_texel
+                                               : (width + 1u) >> 1;
+    return tmem_align_row_stride(row_bytes);
 }
 
 static inline bool tmem_tile_sample_layout(const tmem_state *tmem,
@@ -198,21 +207,16 @@ static inline bool tmem_tile_sample_layout(const tmem_state *tmem,
         *stride = sample->stride;
         return true;
     }
-    if (tmem_tile_extent_from_descriptor(tile, width, height)) {
+    const bool single_descriptor_texel = tile->sh == tile->sl && tile->th == tile->tl;
+    if (!single_descriptor_texel && tmem_tile_extent_from_descriptor(tile, width, height)) {
         *stride = tile->line;
-        if (*stride == 0) {
-            const uint32_t bytes_per_texel = tile->size == RDP_SIZE_32BPP ? 4u :
-                                             tile->size == RDP_SIZE_16BPP ? 2u :
-                                             tile->size == RDP_SIZE_8BPP ? 1u : 0u;
-            if (bytes_per_texel == 0) {
-                return false;
-            }
-            *stride = tmem_align_row_stride(*width * bytes_per_texel);
-        }
+        if (*stride == 0) *stride = tmem_derived_row_stride(tile, *width);
     } else if (tmem->tile_width[tile_index] != 0 && tmem->tile_height[tile_index] != 0) {
         *width = tmem->tile_width[tile_index];
         *height = tmem->tile_height[tile_index];
         *stride = tmem->tile_stride[tile_index];
+    } else if (tmem_tile_extent_from_descriptor(tile, width, height)) {
+        *stride = tile->line ? tile->line : tmem_derived_row_stride(tile, *width);
     } else {
         return false;
     }

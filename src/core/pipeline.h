@@ -45,7 +45,8 @@ typedef enum rdp_block_stage {
     RDP_BLOCK_STAGE_BLEND         = 1u << 2,
     RDP_BLOCK_STAGE_ALPHA_COMPARE = 1u << 3,
     RDP_BLOCK_STAGE_SHADE         = 1u << 4,
-    RDP_BLOCK_STAGE_FILL          = 1u << 5
+    RDP_BLOCK_STAGE_FILL          = 1u << 5,
+    RDP_BLOCK_STAGE_LOD           = 1u << 6
 } rdp_block_stage;
 
 typedef enum rdp_block_sampler_kind {
@@ -95,6 +96,14 @@ typedef struct rdp_primitive_state rdp_primitive_state;
 struct rdp_primitive_state {
     rdp_framebuffer_state framebuffer;
     rdp_texture_sample_state texture;
+    rdp_texture_sample_state lod_textures[8];
+    rdp_texture_sample_state lod_textures_cycle1[8];
+    uint8_t lod_base_tile;
+    uint8_t lod_max_level;
+    uint8_t lod_min_level;
+    bool texture_lod;
+    bool sharpen_lod;
+    bool detail_lod;
     rdp_color_pipeline_state color;
     rdp_fragment_state fragment;
     const tmem_state *tmem;
