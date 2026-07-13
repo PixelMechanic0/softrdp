@@ -133,8 +133,22 @@ typedef struct rdp_blender_cycle {
     uint8_t color_a, factor_a, color_b, factor_b;
 } rdp_blender_cycle;
 
+typedef enum rdp_blender_op {
+    RDP_BLEND_OP_GENERIC = 0,
+    RDP_BLEND_OP_FOG_SHADE_ALPHA,
+    RDP_BLEND_OP_FOG_ALPHA
+} rdp_blender_op;
+
+enum {
+    RDP_BLENDER_INPUT_MEMORY      = 1u << 0,
+    RDP_BLENDER_INPUT_FOG         = 1u << 1,
+    RDP_BLENDER_INPUT_SHADE_ALPHA = 1u << 2
+};
+
 typedef struct rdp_blender_program {
     rdp_blender_cycle cycle[2];
+    uint8_t operation[2];
+    uint8_t input_mask[2];
 } rdp_blender_program;
 
 typedef struct rdp_tile_bounds {
@@ -238,6 +252,7 @@ typedef struct rdp_blend_state {
     rdp_color fog_color;
     rdp_color blend_color;
     rdp_cycle_type cycle_type;
+    uint8_t input_mask;
     bool force_blend;
     bool image_read;
     bool alpha_compare;

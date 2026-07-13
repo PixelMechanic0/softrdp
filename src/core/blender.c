@@ -1,5 +1,31 @@
 #include "blender.h"
 
+static uint8_t compile_cycle(const rdp_blender_cycle *cycle)
+{
+    /* These are the two general RDP fog equations. Keeping them as compiled
+     * blender operations removes four selector branches from every fogged
+     * fragment without creating a separate rendering path. */
+    if (cycle->color_a == 3u && cycle->factor_a == 2u &&
+        cycle->color_b == 0u && cycle->factor_b == 0u)
+        return RDP_BLEND_OP_FOG_SHADE_ALPHA;
+    if (cycle->color_a == 0u && cycle->factor_a == 1u &&
+        cycle->color_b == 3u && cycle->factor_b == 0u)
+        return RDP_BLEND_OP_FOG_ALPHA;
+    return RDP_BLEND_OP_GENERIC;
+}
+
+static uint8_t cycle_input_mask(const rdp_blender_cycle *cycle)
+{
+    uint8_t mask = 0u;
+    if (cycle->color_a == 1u || cycle->color_b == 1u || cycle->factor_b == 1u)
+        mask |= RDP_BLENDER_INPUT_MEMORY;
+    if (cycle->color_a == 3u || cycle->color_b == 3u || cycle->factor_a == 1u)
+        mask |= RDP_BLENDER_INPUT_FOG;
+    if (cycle->factor_a == 2u)
+        mask |= RDP_BLENDER_INPUT_SHADE_ALPHA;
+    return mask;
+}
+
 void rdp_blender_decode(rdp_blender_program *p, uint32_t w1)
 {
     if (!p) return;
@@ -7,6 +33,10 @@ void rdp_blender_decode(rdp_blender_program *p, uint32_t w1)
                                        (w1 >> 22) & 3u, (w1 >> 18) & 3u };
     p->cycle[1] = (rdp_blender_cycle){ (w1 >> 28) & 3u, (w1 >> 24) & 3u,
                                        (w1 >> 20) & 3u, (w1 >> 16) & 3u };
+    for (uint32_t cycle = 0; cycle < 2u; cycle++) {
+        p->operation[cycle] = compile_cycle(&p->cycle[cycle]);
+        p->input_mask[cycle] = cycle_input_mask(&p->cycle[cycle]);
+    }
 }
 
 static rdp_color color_source(uint8_t code, const rdp_blend_state *s,
@@ -43,17 +73,35 @@ static uint16_t factor_b(uint8_t code, uint16_t a, rdp_color memory)
 
 static rdp_color evaluate_cycle(const rdp_blend_state *s,
                                 const rdp_blender_cycle *c,
+                                rdp_blender_op operation,
                                 rdp_color pixel, uint16_t pixel_alpha,
                                 rdp_color memory,
                                 uint8_t shade_alpha,
                                 bool final_cycle)
 {
-    const rdp_color x = color_source(c->color_a, s, pixel, memory);
-    const rdp_color y = color_source(c->color_b, s, pixel, memory);
+    rdp_color x;
+    rdp_color y;
+    uint16_t raw_a;
+    switch (operation) {
+    case RDP_BLEND_OP_FOG_SHADE_ALPHA:
+        x = s->fog_color;
+        y = pixel;
+        raw_a = shade_alpha;
+        break;
+    case RDP_BLEND_OP_FOG_ALPHA:
+        x = pixel;
+        y = s->fog_color;
+        raw_a = s->fog_color.a;
+        break;
+    default:
+        x = color_source(c->color_a, s, pixel, memory);
+        y = color_source(c->color_b, s, pixel, memory);
+        raw_a = factor_a(c->factor_a, s, pixel_alpha, shade_alpha);
+        break;
+    }
     if (final_cycle && c->factor_a == 0u && c->factor_b == 0u &&
         pixel_alpha >= 0xffu)
         return x;
-    const uint16_t raw_a = factor_a(c->factor_a, s, pixel_alpha, shade_alpha);
     const uint32_t a = raw_a >> 3;
     const uint32_t b = (factor_b(c->factor_b, raw_a, memory) >> 3) + 1u;
     const uint32_t red = (uint32_t)x.r * a + (uint32_t)y.r * b;
@@ -87,11 +135,14 @@ rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
     if (!blend_enable)
         return color_source(final->color_a, s, pixel, memory);
     if (s->cycle_count == 2u) {
-        pixel = evaluate_cycle(s, &s->program.cycle[0], pixel, pixel_alpha,
+        pixel = evaluate_cycle(s, &s->program.cycle[0],
+                               (rdp_blender_op)s->program.operation[0], pixel, pixel_alpha,
                                memory, shade_alpha, false);
-        return evaluate_cycle(s, &s->program.cycle[1], pixel, pixel_alpha,
+        return evaluate_cycle(s, &s->program.cycle[1],
+                              (rdp_blender_op)s->program.operation[1], pixel, pixel_alpha,
                               memory, shade_alpha, true);
     }
-    return evaluate_cycle(s, &s->program.cycle[0], pixel, pixel_alpha,
+    return evaluate_cycle(s, &s->program.cycle[0],
+                          (rdp_blender_op)s->program.operation[0], pixel, pixel_alpha,
                           memory, shade_alpha, true);
 }

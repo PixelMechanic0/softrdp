@@ -88,6 +88,9 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.blend.alpha_compare = registers->other_modes.alpha_compare;
     primitive->fragment.blend.cycle_count = registers->other_modes.cycle_type == RDP_CYCLE_2 ? 2u : 1u;
     primitive->fragment.blend.final_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2 ? 1u : 0u;
+    primitive->fragment.blend.input_mask = registers->blender.input_mask[0];
+    if (primitive->fragment.blend.cycle_count == 2u)
+        primitive->fragment.blend.input_mask |= registers->blender.input_mask[1];
     primitive->fragment.alpha_cvg_select = registers->other_modes.alpha_cvg_select;
     primitive->fragment.cvg_times_alpha = registers->other_modes.cvg_times_alpha;
     primitive->fragment.antialias = registers->other_modes.antialias;
@@ -155,7 +158,8 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
     if (plan->depth != RDP_BLOCK_DEPTH_NONE && depth->image_address &&
         (has_depth || depth->source_primitive))
         plan->stages |= RDP_BLOCK_STAGE_DEPTH;
-    if (has_shade && primitive->color.needs_shade)
+    if (has_shade && (primitive->color.needs_shade ||
+        (primitive->fragment.blend.input_mask & RDP_BLENDER_INPUT_SHADE_ALPHA)))
         plan->stages |= RDP_BLOCK_STAGE_SHADE;
     if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1)) {
         plan->stages |= RDP_BLOCK_STAGE_TEXTURE;
