@@ -53,6 +53,10 @@ sr_result fragment_finish_packet(sr_memory *memory,
         if (state->cvg_times_alpha) {
             packet->alpha[lane] = (uint16_t)(((uint32_t)packet->alpha[lane] * packet->coverage[lane] + 4u) >> 3);
             packet->coverage[lane] = (uint8_t)((packet->alpha[lane] >> 5) & 0xfu);
+            if (packet->coverage[lane] == 0u) {
+                active &= (uint16_t)~bit;
+                continue;
+            }
         }
         if (state->alpha_cvg_select && !state->cvg_times_alpha)
             packet->alpha[lane] = (uint16_t)packet->coverage[lane] << 5;

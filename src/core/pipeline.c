@@ -56,6 +56,46 @@ typedef struct rdp_depth_result {
     uint16_t compressed;
 } rdp_depth_result;
 
+static inline uint32_t rdp_depth_decompress(uint16_t stored)
+{
+    static const uint8_t shift[8] = { 6u, 5u, 4u, 3u, 2u, 1u, 0u, 0u };
+    static const uint32_t add[8] = {
+        0x00000u, 0x20000u, 0x30000u, 0x38000u,
+        0x3c000u, 0x3e000u, 0x3f000u, 0x3f800u
+    };
+    const uint32_t encoded = (stored >> 2) & 0x3fffu;
+    const uint32_t exponent = encoded >> 11;
+    return (((encoded & 0x7ffu) << shift[exponent]) + add[exponent]) & 0x3ffffu;
+}
+
+static inline uint16_t rdp_depth_compress(uint32_t depth)
+{
+    depth &= 0x3ffffu;
+    if (depth < 0x20000u) return (uint16_t)((depth >> 4) & 0x1ffcu);
+    if (depth < 0x30000u) return (uint16_t)(((depth >> 3) & 0x1ffcu) | 0x2000u);
+    if (depth < 0x38000u) return (uint16_t)(((depth >> 2) & 0x1ffcu) | 0x4000u);
+    if (depth < 0x3c000u) return (uint16_t)(((depth >> 1) & 0x1ffcu) | 0x6000u);
+    if (depth < 0x3e000u) return (uint16_t)((depth & 0x1ffcu) | 0x8000u);
+    if (depth < 0x3f000u) return (uint16_t)(((depth << 1) & 0x1ffcu) | 0xa000u);
+    if (depth < 0x3f800u) return (uint16_t)(((depth << 2) & 0x1ffcu) | 0xc000u);
+    return (uint16_t)(((depth << 2) & 0x1ffcu) | 0xe000u);
+}
+
+static inline uint32_t highest_depth_delta(uint32_t value)
+{
+    if (value == 0u) return 0u;
+    uint32_t result = 1u;
+    while (value >>= 1u) result <<= 1u;
+    return result;
+}
+
+static inline uint32_t depth_delta_exponent(uint32_t value)
+{
+    uint32_t exponent = 0u;
+    while (value >>= 1u) exponent++;
+    return exponent;
+}
+
 static inline sr_result scalar_depth_test(sr_memory *memory,
                                           const rdp_primitive_state *primitive,
                                           const rdp_span_work *cursor,
@@ -68,29 +108,44 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
         return SR_OK;
     }
 
-    uint16_t old_depth = 0xffffu;
+    uint16_t old_stored = 0xffffu;
     int64_t linear = cursor->depth_fixed;
-    uint16_t new_depth;
+    uint32_t new_depth;
     if (depth->source_primitive) {
-        new_depth = depth->primitive_depth & 0x7fffu;
-    } else if (linear <= 0) {
-        new_depth = 0u;
-    } else if (linear >= 0xffff0000ll) {
-        new_depth = 0xffffu;
+        new_depth = ((uint32_t)depth->primitive_depth << 3) & 0x3ffffu;
     } else {
-        new_depth = (uint16_t)((uint64_t)linear >> 16);
+        const uint32_t scaled = ((uint32_t)linear >> 13) & 0x7ffffu;
+        const uint32_t overflow = (scaled >> 17) & 3u;
+        new_depth = overflow < 2u ? scaled & 0x3ffffu :
+                    overflow == 2u ? 0x3ffffu : 0u;
     }
     if ((depth->compare || depth->update) &&
-        !sr_memory_read_be16(memory, addr, &old_depth)) {
+        !sr_memory_read_be16(memory, addr, &old_stored)) {
         return SR_ERROR_INVALID_ARGUMENT;
     }
     if (depth->compare) {
-        result->pass = new_depth <= old_depth;
+        const uint32_t old_depth = rdp_depth_decompress(old_stored);
+        const bool maximum = old_depth == 0x3ffffu;
+        const bool in_front = new_depth < old_depth;
+        const uint32_t raw_memory_delta = ((old_stored & 3u) << 2) |
+                                          ((old_stored & 1u) ? 3u : 0u);
+        const uint32_t delta = highest_depth_delta(depth->pixel_delta |
+                                                   (1u << raw_memory_delta));
+        const bool nearer = new_depth <= old_depth + delta * 8u;
+        const bool farther = new_depth + delta * 8u >= old_depth;
+        switch (depth->mode & 3u) {
+        case 0u: result->pass = maximum || in_front; break;
+        case 1u: result->pass = maximum || nearer; break;
+        case 2u: result->pass = maximum || in_front; break;
+        default: result->pass = !maximum && nearer && farther; break;
+        }
     }
     if (result->pass && depth->update) {
         result->update = true;
         result->address = addr;
-        result->compressed = new_depth;
+        const uint32_t delta_exponent = depth_delta_exponent(depth->pixel_delta);
+        result->compressed = (uint16_t)(rdp_depth_compress(new_depth) |
+                                        ((delta_exponent >> 2) & 3u));
     }
     return SR_OK;
 }

@@ -228,6 +228,9 @@ typedef struct rdp_texture_sample_state {
 typedef struct rdp_depth_state {
     uint32_t image_address;
     uint16_t primitive_depth;
+    uint16_t primitive_delta_z;
+    uint16_t pixel_delta;
+    uint8_t mode;
     bool compare;
     bool update;
     bool source_primitive;

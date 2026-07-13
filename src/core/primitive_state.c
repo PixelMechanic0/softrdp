@@ -4,6 +4,29 @@
 
 #include <string.h>
 
+static uint16_t compile_depth_delta(const rdp_depth_state *depth,
+                                    const raster_decoded_triangle *triangle)
+{
+    uint32_t value;
+    if (depth->source_primitive) {
+        value = depth->primitive_delta_z;
+    } else {
+        const uint32_t dx = (uint32_t)triangle->depth.dzdx >> 16;
+        const uint32_t dy = (uint32_t)triangle->depth.dzdy >> 16;
+        const uint32_t abs_dx = (dx & 0x8000u) ? (~dx & 0x7fffu) : dx;
+        const uint32_t abs_dy = (dy & 0x8000u) ? (~dy & 0x7fffu) : dy;
+        value = (abs_dx + abs_dy) & 0xffffu;
+        if (value & 0xc000u) return 0x8000u;
+        if (value == 0u) return 1u;
+        if (value == 1u) return 3u;
+        value <<= 1u;
+    }
+    if (value == 0u) return 0u;
+    uint32_t normalized = 1u;
+    while (value >>= 1u) normalized <<= 1u;
+    return (uint16_t)normalized;
+}
+
 void pipeline_resolve_tile_bounds(const rdp_state *state,
                                   const tmem_state *tmem,
                                   uint32_t tile_index,
@@ -65,6 +88,8 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->texture.convert_k3_tf = registers->convert_k3_tf;
     primitive->fragment.depth.image_address = registers->depth_image_address;
     primitive->fragment.depth.primitive_depth = registers->primitive_depth;
+    primitive->fragment.depth.primitive_delta_z = registers->primitive_delta_z;
+    primitive->fragment.depth.mode = registers->other_modes.z_mode;
     primitive->fragment.depth.compare = registers->other_modes.z_compare;
     primitive->fragment.depth.update = registers->other_modes.z_update;
     primitive->fragment.depth.source_primitive = registers->other_modes.z_source_primitive;
@@ -201,6 +226,8 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
                             tmem,
                             triangle->position.tile);
     primitive->triangle = *triangle;
+    primitive->fragment.depth.pixel_delta = compile_depth_delta(
+        &primitive->fragment.depth, triangle);
     primitive->fill_mode = fill_mode;
     primitive->span_kernel = RDP_SPAN_KERNEL_TRIANGLE;
     pipeline_compile_block_plan(primitive, triangle->has_texture,
