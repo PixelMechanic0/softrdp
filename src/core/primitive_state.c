@@ -65,11 +65,11 @@ void pipeline_resolve_tile_bounds(const rdp_state *state,
     bounds->tl = tmem->tile_tl[tile_index];
     bounds->sh = tmem->tile_sh[tile_index];
     bounds->th = tmem->tile_th[tile_index];
-    if (tile->sh > tile->sl || tile->th > tile->tl) {
-        bounds->sl = tile->sl >> 2;
-        bounds->tl = tile->tl >> 2;
-        bounds->sh = tile->sh >> 2;
-        bounds->th = tile->th >> 2;
+    if (tile->sh != tile->sl || tile->th != tile->tl) {
+        bounds->sl = 0u;
+        bounds->tl = 0u;
+        bounds->sh = ((tile->sh >> 2) - (tile->sl >> 2)) & 0x3ffu;
+        bounds->th = ((tile->th >> 2) - (tile->tl >> 2)) & 0x3ffu;
     }
 }
 

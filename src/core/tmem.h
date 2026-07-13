@@ -170,12 +170,12 @@ static inline bool tmem_resolve_rgba32_address_raw(const rdp_tile *tile,
 
 static inline bool tmem_tile_extent_from_descriptor(const rdp_tile *tile, uint32_t *width, uint32_t *height)
 {
-    if (!tile || !width || !height || tile->sh < tile->sl || tile->th < tile->tl) {
+    if (!tile || !width || !height) {
         return false;
     }
 
-    *width = (tile->sh >> 2) - (tile->sl >> 2) + 1u;
-    *height = (tile->th >> 2) - (tile->tl >> 2) + 1u;
+    *width = (((tile->sh >> 2) - (tile->sl >> 2)) & 0x3ffu) + 1u;
+    *height = (((tile->th >> 2) - (tile->tl >> 2)) & 0x3ffu) + 1u;
     return *width != 0 && *height != 0;
 }
 
