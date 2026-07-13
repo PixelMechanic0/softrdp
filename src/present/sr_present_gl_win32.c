@@ -57,8 +57,13 @@ static gl_shader_source_proc p_glShaderSource;
 static gl_uniform_1i_proc p_glUniform1i;
 static gl_use_program_proc p_glUseProgram;
 
+static void *(*g_gl_load_proc)(const char *name) = NULL;
+
 static void *load_gl_proc(const char *name)
 {
+    if (g_gl_load_proc) {
+        return g_gl_load_proc(name);
+    }
     void *proc = (void *)wglGetProcAddress(name);
     if (!proc || proc == (void *)1 || proc == (void *)2 || proc == (void *)3 || proc == (void *)-1) {
         proc = (void *)GetProcAddress(GetModuleHandleA("opengl32.dll"), name);
@@ -285,14 +290,56 @@ bool sr_present_init(sr_present *present, HWND hwnd)
     return true;
 }
 
+bool sr_present_init_external(sr_present *present, void *(*load_proc)(const char *name))
+{
+    if (!present || !load_proc) {
+        return false;
+    }
+
+    sr_present_shutdown(present);
+    memset(present, 0, sizeof(*present));
+    present->external_context = true;
+    g_gl_load_proc = load_proc;
+
+    if (!load_gl33_procs()) {
+        sr_present_shutdown(present);
+        return false;
+    }
+
+    present->program = create_program();
+    if (!present->program) {
+        sr_present_shutdown(present);
+        return false;
+    }
+
+    p_glUseProgram(present->program);
+    GLint sampler = p_glGetUniformLocation(present->program, "u_frame");
+    if (sampler >= 0) {
+        p_glUniform1i(sampler, 0);
+    }
+
+    p_glGenVertexArrays(1, &present->vao);
+    p_glBindVertexArray(present->vao);
+
+    glGenTextures(1, &present->texture);
+    glBindTexture(GL_TEXTURE_2D, present->texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    present->ready = true;
+    return true;
+}
+
 void sr_present_shutdown(sr_present *present)
 {
     if (!present) {
         return;
     }
 
-    if (present->glrc) {
-        wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc);
+    if (present->external_context) {
         if (present->texture) {
             glDeleteTextures(1, &present->texture);
         }
@@ -302,12 +349,25 @@ void sr_present_shutdown(sr_present *present)
         if (present->program && p_glDeleteProgram) {
             p_glDeleteProgram(present->program);
         }
-        wglMakeCurrent(NULL, NULL);
-        wglDeleteContext((HGLRC)present->glrc);
-    }
+    } else {
+        if (present->glrc) {
+            wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc);
+            if (present->texture) {
+                glDeleteTextures(1, &present->texture);
+            }
+            if (present->vao && p_glDeleteVertexArrays) {
+                p_glDeleteVertexArrays(1, &present->vao);
+            }
+            if (present->program && p_glDeleteProgram) {
+                p_glDeleteProgram(present->program);
+            }
+            wglMakeCurrent(NULL, NULL);
+            wglDeleteContext((HGLRC)present->glrc);
+        }
 
-    if (present->hwnd && present->hdc) {
-        ReleaseDC(present->hwnd, (HDC)present->hdc);
+        if (present->hwnd && present->hdc) {
+            ReleaseDC(present->hwnd, (HDC)present->hdc);
+        }
     }
 
     memset(present, 0, sizeof(*present));
@@ -318,15 +378,37 @@ void sr_present_clear(sr_present *present)
     int width;
     int height;
 
-    if (!present || !present->ready || !wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
+    if (!present || !present->ready) {
         return;
     }
 
-    get_client_size(present->hwnd, &width, &height);
+    if (!present->external_context) {
+        if (!wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
+            return;
+        }
+    }
+
+    if (present->external_context) {
+        width = present->display_width ? present->display_width : 640;
+        height = present->display_height ? present->display_height : 480;
+    } else {
+        get_client_size(present->hwnd, &width, &height);
+    }
+
+    GLboolean scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+
     glViewport(0, 0, width, height);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    SwapBuffers((HDC)present->hdc);
+
+    if (scissor_test) {
+        glEnable(GL_SCISSOR_TEST);
+    }
+
+    if (!present->external_context) {
+        SwapBuffers((HDC)present->hdc);
+    }
 }
 
 void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t height)
@@ -341,11 +423,33 @@ void sr_present_draw(sr_present *present)
     int width;
     int height;
 
-    if (!present || !present->ready || !wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
+    if (!present || !present->ready) {
         return;
     }
 
-    get_client_size(present->hwnd, &width, &height);
+    if (!present->external_context) {
+        if (!wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
+            return;
+        }
+    }
+
+    if (present->external_context) {
+        width = present->display_width ? present->display_width : 640;
+        height = present->display_height ? present->display_height : 480;
+    } else {
+        get_client_size(present->hwnd, &width, &height);
+    }
+
+    GLboolean depth_test = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean scissor_test = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean blend = glIsEnabled(GL_BLEND);
+    GLboolean cull_face = glIsEnabled(GL_CULL_FACE);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+
     glViewport(0, 0, width, height);
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -376,7 +480,14 @@ void sr_present_draw(sr_present *present)
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
-    SwapBuffers((HDC)present->hdc);
+    if (depth_test) glEnable(GL_DEPTH_TEST);
+    if (scissor_test) glEnable(GL_SCISSOR_TEST);
+    if (blend) glEnable(GL_BLEND);
+    if (cull_face) glEnable(GL_CULL_FACE);
+
+    if (!present->external_context) {
+        SwapBuffers((HDC)present->hdc);
+    }
 }
 
 bool sr_present_upload_rgba8(sr_present *present,
@@ -388,8 +499,10 @@ bool sr_present_upload_rgba8(sr_present *present,
     if (!present || !present->ready || !pixels || width == 0 || height == 0 || stride_pixels < width) {
         return false;
     }
-    if (!wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
-        return false;
+    if (!present->external_context) {
+        if (!wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
+            return false;
+        }
     }
 
     glBindTexture(GL_TEXTURE_2D, present->texture);
@@ -418,6 +531,13 @@ bool sr_present_init(sr_present *present, HWND hwnd)
 {
     (void)present;
     (void)hwnd;
+    return false;
+}
+
+bool sr_present_init_external(sr_present *present, void *(*load_proc)(const char *name))
+{
+    (void)present;
+    (void)load_proc;
     return false;
 }
 
