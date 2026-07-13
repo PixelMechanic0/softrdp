@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 
 #ifdef _MSC_VER
 #include <stdlib.h>

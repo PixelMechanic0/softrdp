@@ -33,9 +33,7 @@ typedef void(APIENTRY *gl_delete_vertex_arrays_proc)(GLsizei n, const GLuint *ar
 typedef void(APIENTRY *gl_gen_vertex_arrays_proc)(GLsizei n, GLuint *arrays);
 typedef GLint(APIENTRY *gl_get_uniform_location_proc)(GLuint program, const char *name);
 typedef void(APIENTRY *gl_get_program_iv_proc)(GLuint program, GLenum pname, GLint *params);
-typedef void(APIENTRY *gl_get_program_info_log_proc)(GLuint program, GLsizei buf_size, GLsizei *length, char *info_log);
 typedef void(APIENTRY *gl_get_shader_iv_proc)(GLuint shader, GLenum pname, GLint *params);
-typedef void(APIENTRY *gl_get_shader_info_log_proc)(GLuint shader, GLsizei buf_size, GLsizei *length, char *info_log);
 typedef void(APIENTRY *gl_link_program_proc)(GLuint program);
 typedef void(APIENTRY *gl_shader_source_proc)(GLuint shader, GLsizei count, const char *const *string, const GLint *length);
 typedef void(APIENTRY *gl_uniform_1i_proc)(GLint location, GLint v0);
@@ -53,9 +51,7 @@ static gl_delete_vertex_arrays_proc p_glDeleteVertexArrays;
 static gl_gen_vertex_arrays_proc p_glGenVertexArrays;
 static gl_get_uniform_location_proc p_glGetUniformLocation;
 static gl_get_program_iv_proc p_glGetProgramiv;
-static gl_get_program_info_log_proc p_glGetProgramInfoLog;
 static gl_get_shader_iv_proc p_glGetShaderiv;
-static gl_get_shader_info_log_proc p_glGetShaderInfoLog;
 static gl_link_program_proc p_glLinkProgram;
 static gl_shader_source_proc p_glShaderSource;
 static gl_uniform_1i_proc p_glUniform1i;
@@ -83,9 +79,7 @@ static bool load_gl33_procs(void)
     p_glGenVertexArrays = (gl_gen_vertex_arrays_proc)load_gl_proc("glGenVertexArrays");
     p_glGetUniformLocation = (gl_get_uniform_location_proc)load_gl_proc("glGetUniformLocation");
     p_glGetProgramiv = (gl_get_program_iv_proc)load_gl_proc("glGetProgramiv");
-    p_glGetProgramInfoLog = (gl_get_program_info_log_proc)load_gl_proc("glGetProgramInfoLog");
     p_glGetShaderiv = (gl_get_shader_iv_proc)load_gl_proc("glGetShaderiv");
-    p_glGetShaderInfoLog = (gl_get_shader_info_log_proc)load_gl_proc("glGetShaderInfoLog");
     p_glLinkProgram = (gl_link_program_proc)load_gl_proc("glLinkProgram");
     p_glShaderSource = (gl_shader_source_proc)load_gl_proc("glShaderSource");
     p_glUniform1i = (gl_uniform_1i_proc)load_gl_proc("glUniform1i");
@@ -94,8 +88,8 @@ static bool load_gl33_procs(void)
     return p_glAttachShader && p_glBindVertexArray && p_glCompileShader &&
            p_glCreateProgram && p_glCreateShader && p_glDeleteProgram &&
            p_glDeleteShader && p_glDeleteVertexArrays && p_glGenVertexArrays &&
-           p_glGetUniformLocation && p_glGetProgramiv && p_glGetProgramInfoLog &&
-           p_glGetShaderiv && p_glGetShaderInfoLog && p_glLinkProgram &&
+           p_glGetUniformLocation && p_glGetProgramiv &&
+           p_glGetShaderiv && p_glLinkProgram &&
            p_glShaderSource && p_glUniform1i && p_glUseProgram;
 }
 
