@@ -128,20 +128,25 @@ static bool read_command_word(const sr_context *ctx, bool xbus_dma, uint32_t wor
     return sr_memory_read_be32(&ctx->memory, word_index << 2, word);
 }
 
-static void finish_rdp_list(sr_context *ctx, uint32_t end, bool interrupt)
+static void raise_dp_interrupt(sr_context *ctx)
 {
+    if (ctx->host.mi_intr_reg) {
+        *ctx->host.mi_intr_reg |= DP_INTERRUPT;
+    }
+    if (ctx->host.raise_mi_interrupt) {
+        ctx->host.raise_mi_interrupt(ctx->host.userdata);
+    }
+}
+
+static void finish_rdp_list(sr_context *ctx)
+{
+    /* DPC_END is owned by the command producer and may change in the
+     * SyncFull interrupt callback. Match the RDP/reference implementation:
+     * acknowledge the list using the current END value, but never overwrite it.
+     */
+    const uint32_t end = read_reg(ctx->host.dp_regs, SR_DP_END);
     write_reg(ctx->host.dp_regs, SR_DP_START, end);
     write_reg(ctx->host.dp_regs, SR_DP_CURRENT, end);
-    write_reg(ctx->host.dp_regs, SR_DP_END, end);
-
-    if (interrupt) {
-        if (ctx->host.mi_intr_reg) {
-            *ctx->host.mi_intr_reg |= DP_INTERRUPT;
-        }
-        if (ctx->host.raise_mi_interrupt) {
-            ctx->host.raise_mi_interrupt(ctx->host.userdata);
-        }
-    }
 }
 
 static void rdp_state_init(rdp_state *state)
@@ -265,7 +270,6 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
     uint32_t current;
     uint32_t end;
     bool xbus_dma;
-    bool full_sync_seen = false;
 
     current = read_reg(ctx->host.dp_regs, SR_DP_CURRENT) & ~7u;
     end = read_reg(ctx->host.dp_regs, SR_DP_END) & ~7u;
@@ -282,7 +286,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
     }
     if (end - current > MAX_RDP_LIST_BYTES) {
         ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-        finish_rdp_list(ctx, end, false);
+        finish_rdp_list(ctx);
         return SR_ERROR_BAD_COMMAND;
     }
 
@@ -301,7 +305,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
                     if (!read_command_word(ctx, xbus_dma, (current >> 2) + word,
                                            &cmd.words[word])) {
                         ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-                        finish_rdp_list(ctx, end, false);
+                        finish_rdp_list(ctx);
                         return SR_ERROR_BAD_COMMAND;
                     }
                 }
@@ -309,7 +313,11 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
                 ctx->debug.last_command_id = command_id;
                 const sr_result result = execute_rdp_command(ctx, &cmd);
                 ctx->debug.last_result = result;
-                finish_rdp_list(ctx, end, result == SR_OK && cmd.id == RDP_CMD_SYNC_FULL);
+                if (result == SR_OK && cmd.id == RDP_CMD_SYNC_FULL) {
+                    /* Match the RDP: signal SyncFull before acknowledging the list. */
+                    raise_dp_interrupt(ctx);
+                }
+                finish_rdp_list(ctx);
                 return result;
             }
         }
@@ -321,7 +329,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
             if (!read_command_word(ctx, xbus_dma, current >> 2, &first_word)) {
                 ctx->debug.last_command_address = current;
                 ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-                finish_rdp_list(ctx, end, false);
+                finish_rdp_list(ctx);
                 return SR_ERROR_BAD_COMMAND;
             }
 
@@ -329,7 +337,7 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
             ctx->cmd_word_count = rdp_command_word_count((rdp_command_id)ctx->cmd_id);
             if (ctx->cmd_word_count == 0 || ctx->cmd_word_count > SR_MAX_COMMAND_WORDS) {
                 ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-                finish_rdp_list(ctx, end, false);
+                finish_rdp_list(ctx);
                 return SR_ERROR_BAD_COMMAND;
             }
 
@@ -346,14 +354,14 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         while (ctx->cmd_words_loaded < ctx->cmd_word_count) {
             if (current >= end) {
                 /* Command is truncated in this list. Stop and wait for the next list. */
-                finish_rdp_list(ctx, current, false);
+                finish_rdp_list(ctx);
                 return SR_OK;
             }
 
             uint32_t word = 0;
             if (!read_command_word(ctx, xbus_dma, current >> 2, &word)) {
                 ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-                finish_rdp_list(ctx, end, false);
+                finish_rdp_list(ctx);
                 return SR_ERROR_BAD_COMMAND;
             }
 
@@ -374,17 +382,18 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
 
         if (result != SR_OK) {
             ctx->debug.last_result = result;
-            finish_rdp_list(ctx, end, false);
+            finish_rdp_list(ctx);
             return result;
         }
 
         if (cmd.id == RDP_CMD_SYNC_FULL) {
-            full_sync_seen = true;
+            /* The interrupt belongs to this command, not to list completion. */
+            raise_dp_interrupt(ctx);
         }
 
     }
 
-    finish_rdp_list(ctx, end, full_sync_seen);
+    finish_rdp_list(ctx);
     return SR_OK;
 }
 

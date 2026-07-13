@@ -38,6 +38,7 @@ static WINDOWPLACEMENT g_old_pos;
 static bool g_dump_requested = false;
 static bool g_record_active = false;
 static FILE* g_frame_dump_file = NULL;
+static SRWLOCK g_frame_dump_lock = SRWLOCK_INIT;
 static uint32_t g_rdram_size = 0x400000;
 enum { FRAME_DUMP_PRESENT_COUNT = 4u };
 static uint32_t g_dump_presents_remaining = 0;
@@ -149,7 +150,12 @@ static const char *result_name(sr_result result)
 }
 #endif
 
-static bool dump_write_rdram_deltas(FILE *file)
+static bool dump_write_record(FILE *file,
+                              uint32_t command_size,
+                              const uint32_t dp_regs[8],
+                              const uint32_t vi_regs[14],
+                              uint32_t command_address,
+                              bool xbus_dma)
 {
     uint32_t changed[2048];
     uint32_t changed_count = 0;
@@ -162,15 +168,47 @@ static bool dump_write_rdram_deltas(FILE *file)
                    FRAME_DUMP_PAGE_SIZE) != 0)
             changed[changed_count++] = page;
     }
-    if (fwrite(&changed_count, 4, 1, file) != 1) return false;
+
+    const size_t record_size = sizeof(changed_count) +
+        (size_t)changed_count * (sizeof(uint32_t) + FRAME_DUMP_PAGE_SIZE) +
+        sizeof(command_size) + 8u * sizeof(uint32_t) + 14u * sizeof(uint32_t) +
+        command_size;
+    uint8_t *record = malloc(record_size);
+    if (!record) return false;
+
+    uint8_t *cursor = record;
+    memcpy(cursor, &changed_count, sizeof(changed_count));
+    cursor += sizeof(changed_count);
     for (uint32_t i = 0; i < changed_count; i++) {
         const uint32_t page = changed[i];
         const uint32_t offset = page * FRAME_DUMP_PAGE_SIZE;
-        if (fwrite(&page, 4, 1, file) != 1 ||
-            !dump_write_all(file, g_gfx.RDRAM + offset, FRAME_DUMP_PAGE_SIZE)) return false;
-        memcpy(g_dump_rdram_shadow + offset, g_gfx.RDRAM + offset, FRAME_DUMP_PAGE_SIZE);
+        memcpy(cursor, &page, sizeof(page));
+        cursor += sizeof(page);
+        memcpy(cursor, g_gfx.RDRAM + offset, FRAME_DUMP_PAGE_SIZE);
+        memcpy(g_dump_rdram_shadow + offset, cursor, FRAME_DUMP_PAGE_SIZE);
+        cursor += FRAME_DUMP_PAGE_SIZE;
     }
-    return true;
+    memcpy(cursor, &command_size, sizeof(command_size));
+    cursor += sizeof(command_size);
+    memcpy(cursor, dp_regs, 8u * sizeof(uint32_t));
+    cursor += 8u * sizeof(uint32_t);
+    memcpy(cursor, vi_regs, 14u * sizeof(uint32_t));
+    cursor += 14u * sizeof(uint32_t);
+    if (command_size) {
+        if (xbus_dma) {
+            for (uint32_t byte = 0; byte < command_size; byte++) {
+                cursor[byte] = g_gfx.DMEM[(command_address + byte) & (SR_DMEM_SIZE - 1u)];
+            }
+        } else {
+            memcpy(cursor, g_gfx.RDRAM + command_address, command_size);
+        }
+        cursor += command_size;
+    }
+
+    const bool ok = cursor == record + record_size &&
+                    fwrite(record, 1, record_size, file) == record_size;
+    free(record);
+    return ok;
 }
 
 static bool command_has_texture_debug(uint32_t command_id)
@@ -548,6 +586,16 @@ static void stop_runtime(void)
 #if SOFTRDP_ENABLE_PERF_LOG
     log_perf_summary("Shutdown");
 #endif
+    AcquireSRWLockExclusive(&g_frame_dump_lock);
+    g_record_active = false;
+    g_dump_requested = false;
+    if (g_frame_dump_file) {
+        fclose(g_frame_dump_file);
+        g_frame_dump_file = NULL;
+    }
+    free(g_dump_rdram_shadow);
+    g_dump_rdram_shadow = NULL;
+    ReleaseSRWLockExclusive(&g_frame_dump_lock);
     if (g_runtime_started || pj64_log_is_open()) {
         pj64_log_printf("stop_runtime rdp_calls=%u update_calls=%u uploaded_frames=%u",
                           g_process_rdp_calls,
@@ -697,15 +745,16 @@ void PJ64_CALL ProcessRDPList(void)
     g_process_rdp_calls++;
 
     if (g_context) {
-        // Detect F11 keypress (edge-triggered) to dump current frame data
-        static bool g_f11_was_down = false;
-        bool f11_is_down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
-        if (f11_is_down && !g_f11_was_down) {
+        static bool f11_was_down = false;
+        const bool f11_is_down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+        const bool dump_key_pressed = f11_is_down && !f11_was_down;
+        f11_was_down = f11_is_down;
+
+        AcquireSRWLockExclusive(&g_frame_dump_lock);
+        if (dump_key_pressed && !g_record_active) {
             g_dump_requested = true;
             pj64_log_printf("F11 pressed: Requesting frame dump on next RDP list");
         }
-        g_f11_was_down = f11_is_down;
- 
         if (g_dump_requested) {
             g_dump_requested = false;
             g_record_active = true;
@@ -769,7 +818,15 @@ void PJ64_CALL ProcessRDPList(void)
         if (g_record_active && g_frame_dump_file) {
             uint32_t current = read_reg_value(g_gfx.DPC_CURRENT_REG) & ~7u;
             uint32_t end = read_reg_value(g_gfx.DPC_END_REG) & ~7u;
-            uint32_t size = (end > current && current < g_rdram_size && end <= g_rdram_size) ? (end - current) : 0;
+            const bool xbus_dma = (read_reg_value(g_gfx.DPC_STATUS_REG) & 0x001u) != 0u;
+            uint32_t size = 0;
+            if (end > current) {
+                if (xbus_dma && g_gfx.DMEM && end - current <= SR_DMEM_SIZE) {
+                    size = end - current;
+                } else if (!xbus_dma && current < g_rdram_size && end <= g_rdram_size) {
+                    size = end - current;
+                }
+            }
             
             uint32_t dp_regs[8];
             dp_regs[0] = read_reg_value(g_gfx.DPC_START_REG);
@@ -797,24 +854,29 @@ void PJ64_CALL ProcessRDPList(void)
             vi_regs[12] = read_reg_value(g_gfx.VI_X_SCALE_REG);
             vi_regs[13] = read_reg_value(g_gfx.VI_Y_SCALE_REG);
             
-            if (!dump_write_rdram_deltas(g_frame_dump_file)) {
-                pj64_log_printf("ERROR: Could not write RDRAM deltas to frame dump");
+            if (!dump_write_record(g_frame_dump_file, size, dp_regs, vi_regs, current,
+                                   xbus_dma)) {
+                pj64_log_printf("ERROR: Could not write atomic frame dump record");
                 fclose(g_frame_dump_file);
                 g_frame_dump_file = NULL;
                 g_record_active = false;
                 free(g_dump_rdram_shadow);
                 g_dump_rdram_shadow = NULL;
             } else {
-                fwrite(&size, 4, 1, g_frame_dump_file);
-                fwrite(dp_regs, 4, 8, g_frame_dump_file);
-                fwrite(vi_regs, 4, 14, g_frame_dump_file);
-                if (size > 0)
-                    fwrite(g_gfx.RDRAM + current, 1, size, g_frame_dump_file);
                 g_recorded_lists_count++;
             }
         }
+        ReleaseSRWLockExclusive(&g_frame_dump_lock);
 
         result = sr_process_rdp_list(g_context);
+        AcquireSRWLockExclusive(&g_frame_dump_lock);
+        if (g_record_active && g_dump_rdram_shadow && g_gfx.RDRAM) {
+            /* RDP writes must be reproduced independently by each replay
+             * renderer, not injected into the next record as host deltas.
+             */
+            memcpy(g_dump_rdram_shadow, g_gfx.RDRAM, g_rdram_size);
+        }
+        ReleaseSRWLockExclusive(&g_frame_dump_lock);
         stats = sr_get_debug_stats(g_context);
         if (PJ64_LOG_ENABLED &&
             (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
@@ -898,6 +960,7 @@ void PJ64_CALL UpdateScreen(void)
     }
     sr_present_set_display_size(&g_present, g_display_width, g_display_height);
 
+    AcquireSRWLockExclusive(&g_frame_dump_lock);
     if (g_record_active && g_dump_presents_remaining > 0u) {
         g_dump_presents_remaining--;
     }
@@ -924,6 +987,7 @@ void PJ64_CALL UpdateScreen(void)
                                   closed ? 1 : 0, errno);
         }
     }
+    ReleaseSRWLockExclusive(&g_frame_dump_lock);
 
     if (!g_context || !g_present.ready || !ensure_frame_storage(g_frame_width, g_frame_height)) {
         if (PJ64_LOG_ENABLED && log_sample_u32(g_update_screen_calls, 32u, 600u)) {

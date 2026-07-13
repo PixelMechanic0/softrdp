@@ -525,6 +525,11 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
             : (uint16_t)((1u << count) - 1u);
         for (uint32_t lane = 0; lane < count; lane++) {
             packet.lod_fraction[lane] = 0u;
+            /* Texture rectangles carry no shade coefficients. The RDP
+             * edgewalker supplies zero RGBA shade attributes for every lane.
+             */
+            for (uint32_t component = 0; component < 4u; component++)
+                packet.shade[component][lane] = 0u;
         }
         if (needs_texture) {
             for (uint32_t lane = 0; lane < count; lane++) {
