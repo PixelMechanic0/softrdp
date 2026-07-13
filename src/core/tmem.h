@@ -470,7 +470,10 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         return false;
     }
 
-    if (tile->format == RDP_FORMAT_CI && sample->tlut_enable) {
+    const bool indexed_tlut = sample->tlut_enable &&
+        (tile->format == RDP_FORMAT_CI ||
+         (tile->format == RDP_FORMAT_RGBA && tile->size == RDP_SIZE_8BPP));
+    if (indexed_tlut) {
         uint32_t index;
         if (tile->size == RDP_SIZE_4BPP && address.bytes == 1) {
             const uint8_t packed = tmem->bytes[address.byte];

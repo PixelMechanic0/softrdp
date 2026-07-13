@@ -125,7 +125,9 @@ static void pipeline_compile_texture(rdp_texture_sample_state *texture,
                texture->tile.format == RDP_FORMAT_I && texture->tile.size == RDP_SIZE_4BPP) {
         texture->sampler_class = RDP_SAMPLER_I4_BILERP;
     } else if (texture->bilerp && texture->sample_quad &&
-               texture->tile.format == RDP_FORMAT_CI && texture->tile.size == RDP_SIZE_8BPP &&
+               (texture->tile.format == RDP_FORMAT_CI ||
+                texture->tile.format == RDP_FORMAT_RGBA) &&
+               texture->tile.size == RDP_SIZE_8BPP &&
                texture->tlut_enable) {
         texture->sampler_class = RDP_SAMPLER_CI8_TLUT_BILERP;
     } else if (texture->bilerp && texture->sample_quad &&
