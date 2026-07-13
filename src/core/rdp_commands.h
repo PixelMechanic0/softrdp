@@ -127,6 +127,7 @@ typedef rdp_combiner_program rdp_set_combine_cmd;
 
 typedef struct rdp_rect_cmd {
     uint32_t x0, y0, x1, y1;
+    uint16_t xl, yl;
     uint8_t tile_index;
     int32_t s0, t0, dsdx, dtdy;
     bool flip;

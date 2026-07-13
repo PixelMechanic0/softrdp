@@ -305,6 +305,12 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
         .x1 = rect_cmd->x1,
         .y1 = rect_cmd->y1
     };
+    if (state->other_modes.cycle_type == RDP_CYCLE_1 ||
+        state->other_modes.cycle_type == RDP_CYCLE_2) {
+        if (rect_cmd->xl == 0u || rect_cmd->yl == 0u) return SR_OK;
+        rect.x1 = (rect_cmd->xl - 1u) >> 2;
+        rect.y1 = (rect_cmd->yl - 1u) >> 2;
+    }
     const uint32_t base_x = rect.x0;
     const uint32_t base_y = rect.y0;
 
@@ -367,6 +373,20 @@ static sr_result raster_submit_rectangle_internal(sr_memory *memory,
     }
 
     if (!clip_rect_to_scissor(&rect, state)) {
+        return SR_OK;
+    }
+
+    if (state->other_modes.cycle_type != RDP_CYCLE_FILL &&
+        state->other_modes.cycle_type != RDP_CYCLE_COPY) {
+        rdp_primitive_state primitive;
+        pipeline_compile_color_rectangle(&primitive, state, tmem);
+        for (uint32_t y = rect.y0; y <= rect.y1; y++) {
+            rdp_span_work work;
+            pipeline_setup_rectangle_span((int)rect.x0, (int)rect.x1, (int)y,
+                                          0, 0, 0, 0, &work);
+            const sr_result result = pipeline_render_span(memory, &primitive, &work);
+            if (result != SR_OK) return result;
+        }
         return SR_OK;
     }
 

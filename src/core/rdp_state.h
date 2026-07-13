@@ -252,6 +252,7 @@ typedef struct rdp_fragment_state {
     bool cvg_times_alpha;
     bool antialias;
     uint8_t coverage_dest;
+    uint8_t rgb_dither;
 } rdp_fragment_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)

@@ -92,6 +92,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.cvg_times_alpha = registers->other_modes.cvg_times_alpha;
     primitive->fragment.antialias = registers->other_modes.antialias;
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
+    primitive->fragment.rgb_dither = registers->other_modes.rgb_dither;
     primitive->tmem = tmem;
     pipeline_resolve_tile_bounds(registers,
                                  tmem,
@@ -216,4 +217,14 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
         ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
         : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
     pipeline_compile_block_plan(primitive, true, false, false);
+}
+
+void pipeline_compile_color_rectangle(rdp_primitive_state *primitive,
+                                      const rdp_state *registers,
+                                      const tmem_state *tmem)
+{
+    if (!primitive || !registers) return;
+    pipeline_compile_common(primitive, registers, tmem, 0u);
+    primitive->span_kernel = RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
+    pipeline_compile_block_plan(primitive, false, false, false);
 }

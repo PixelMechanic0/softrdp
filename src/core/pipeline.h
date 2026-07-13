@@ -129,6 +129,9 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
                                 const rdp_state *registers,
                                 const tmem_state *tmem,
                                 uint32_t tile_index);
+void pipeline_compile_color_rectangle(rdp_primitive_state *primitive,
+                                      const rdp_state *registers,
+                                      const tmem_state *tmem);
 
 void pipeline_setup_rectangle_span(int x_begin,
                                    int x_end,

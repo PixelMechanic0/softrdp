@@ -159,8 +159,10 @@ static void decode_set_combine(rdp_set_combine_cmd *combine, uint32_t w0, uint32
 
 static void decode_rect(rdp_rect_cmd *rect, const rdp_command *cmd)
 {
-    rect->x1 = ((cmd->words[0] >> 12) & 0xfffu) >> 2;
-    rect->y1 = (cmd->words[0] & 0xfffu) >> 2;
+    rect->xl = (uint16_t)((cmd->words[0] >> 12) & 0xfffu);
+    rect->yl = (uint16_t)(cmd->words[0] & 0xfffu);
+    rect->x1 = rect->xl >> 2;
+    rect->y1 = rect->yl >> 2;
     rect->x0 = ((cmd->words[1] >> 12) & 0xfffu) >> 2;
     rect->y0 = (cmd->words[1] & 0xfffu) >> 2;
     rect->flip = cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP;
