@@ -296,7 +296,11 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
     const uint32_t tile_index = rect_cmd->tile_index;
     const int32_t s0 = rect_cmd->s0;
     const int32_t t0 = rect_cmd->t0;
-    const int32_t dsdx = rect_cmd->dsdx;
+    /* Copy mode advances one texture coordinate step per four-pixel copy
+     * group. This scalar renderer emits one framebuffer pixel at a time, so
+     * convert the command's group derivative to a per-pixel derivative. */
+    const int32_t dsdx = state->other_modes.cycle_type == RDP_CYCLE_COPY
+        ? rect_cmd->dsdx >> 2 : rect_cmd->dsdx;
     const int32_t dtdy = rect_cmd->dtdy;
     const bool flip = rect_cmd->flip;
     
