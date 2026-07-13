@@ -66,7 +66,10 @@ static inline uint32_t tmem_align_row_stride(uint32_t bytes)
 
 static inline uint32_t tmem_physical_byte(uint32_t byte)
 {
-    return byte ^ 3u;
+    /* TMEM words are stored in big-endian byte order in this representation.
+     * Word addressing already swaps adjacent 16-bit lanes, so byte textures
+     * select within the resulting word with XOR 2. */
+    return byte ^ 2u;
 }
 
 static inline uint32_t tmem_physical_word_byte(uint32_t byte)
