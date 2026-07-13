@@ -132,16 +132,21 @@ rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
 {
     if (!s) return pixel;
     const rdp_blender_cycle *final = &s->program.cycle[s->final_cycle];
-    if (!blend_enable)
-        return color_source(final->color_a, s, pixel, memory);
     if (s->cycle_count == 2u) {
+        /* Cycle 0 is part of the two-cycle color pipeline (commonly fog), not
+         * conditional framebuffer blending. Only cycle 1 may be bypassed by
+         * blend_enable. */
         pixel = evaluate_cycle(s, &s->program.cycle[0],
                                (rdp_blender_op)s->program.operation[0], pixel, pixel_alpha,
                                memory, shade_alpha, false);
+        if (!blend_enable)
+            return color_source(final->color_a, s, pixel, memory);
         return evaluate_cycle(s, &s->program.cycle[1],
                               (rdp_blender_op)s->program.operation[1], pixel, pixel_alpha,
                               memory, shade_alpha, true);
     }
+    if (!blend_enable)
+        return color_source(final->color_a, s, pixel, memory);
     return evaluate_cycle(s, &s->program.cycle[0],
                           (rdp_blender_op)s->program.operation[0], pixel, pixel_alpha,
                           memory, shade_alpha, true);
