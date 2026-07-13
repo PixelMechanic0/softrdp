@@ -449,7 +449,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 if (!(block.active_mask & bit)) continue;
                 const int32_t s = block.sample_s[lane], t = block.sample_t[lane];
                 const rdp_texture_sample_state *texture0 = texture;
-                const rdp_texture_sample_state *texture1 = texture;
+                const rdp_texture_sample_state *texture1 = &primitive->texture_cycle1;
                 if (uses_lod) {
                     const rdp_lod_result lod = color_pipeline->cycle_type == RDP_CYCLE_1
                         ? resolve_lod(primitive, next_s[lane], next_t[lane],
@@ -537,16 +537,23 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     (offset + lane) * (uint32_t)work->dsdx_fixed);
                 const int32_t t = (int32_t)((uint32_t)work->t_fixed +
                     (offset + lane) * (uint32_t)work->dtdx_fixed);
-                rdp_color texel;
-                if (!tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
-                                              s, t, &texel)) {
+                rdp_color texel0, texel1;
+                const bool ok0 = !color->needs_texel0 ||
+                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
+                                             s, t, &texel0);
+                const bool ok1 = !color->needs_texel1 ||
+                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture_cycle1,
+                                             s, t, &texel1);
+                if (!ok0 || !ok1) {
                     live_mask &= (uint16_t)~(1u << lane);
                     continue;
                 }
-                packet.texel0[0][lane] = packet.texel1[0][lane] = texel.r;
-                packet.texel0[1][lane] = packet.texel1[1][lane] = texel.g;
-                packet.texel0[2][lane] = packet.texel1[2][lane] = texel.b;
-                packet.texel0[3][lane] = packet.texel1[3][lane] = texel.a;
+                if (color->needs_texel0) store_texel(packet.texel0, lane, texel0);
+                if (color->needs_texel1) store_texel(packet.texel1, lane, texel1);
+                if (!color->needs_texel1 && color->needs_texel0)
+                    store_texel(packet.texel1, lane, texel0);
+                if (!color->needs_texel0 && color->needs_texel1)
+                    store_texel(packet.texel0, lane, texel1);
             }
         }
         rdp_combiner_evaluate_packet(color, &packet);

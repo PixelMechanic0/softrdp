@@ -26,8 +26,15 @@ static inline sr_result framebuffer_read_memory_address(sr_memory *memory,
     } else if (size == RDP_SIZE_16BPP) {
         uint16_t value;
         if (!sr_memory_read_be16(memory, address, &value)) return SR_ERROR_INVALID_ARGUMENT;
-        pixel->color = pipeline_rgba5551_to_color(value);
-        pixel->color.a &= 0xe0u;
+        /* The blender sees the stored five color bits in the high bits of
+         * each channel; unlike texture decode, framebuffer read does not
+         * replicate them into the low three bits. */
+        pixel->color = (rdp_color){
+            (uint8_t)((value >> 8) & 0xf8u),
+            (uint8_t)((value >> 3) & 0xf8u),
+            (uint8_t)((value << 2) & 0xf8u),
+            (value & 1u) ? 0xe0u : 0u
+        };
     } else if (size == RDP_SIZE_32BPP) {
         uint32_t value;
         if (!sr_memory_read_be32(memory, address, &value)) return SR_ERROR_INVALID_ARGUMENT;

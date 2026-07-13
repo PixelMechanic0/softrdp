@@ -172,6 +172,10 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.needs_shade = (active_combiner_inputs & RDP_COMBINER_INPUT_SHADE) != 0;
     primitive->color.needs_lod_fraction =
         (active_combiner_inputs & RDP_COMBINER_INPUT_LOD_FRACTION) != 0;
+    primitive->texture_cycle1 = primitive->texture;
+    if (primitive->color.two_cycle && primitive->color.needs_texel1)
+        pipeline_compile_texture(&primitive->texture_cycle1, registers, tmem,
+                                 (tile_index + 1u) & 7u, true);
     primitive->color.convert_k4 = registers->convert_k4;
     primitive->color.convert_k5 = registers->convert_k5;
     primitive->fragment.blend.program = registers->blender;

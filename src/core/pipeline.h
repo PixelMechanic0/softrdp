@@ -96,6 +96,7 @@ typedef struct rdp_primitive_state rdp_primitive_state;
 struct rdp_primitive_state {
     rdp_framebuffer_state framebuffer;
     rdp_texture_sample_state texture;
+    rdp_texture_sample_state texture_cycle1;
     uint8_t lod_base_tile;
     uint8_t lod_max_level;
     uint8_t lod_min_level;
