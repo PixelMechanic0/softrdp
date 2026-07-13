@@ -389,8 +389,8 @@ void sr_present_clear(sr_present *present)
     }
 
     if (present->external_context) {
-        width = present->display_width ? present->display_width : 640;
-        height = present->display_height ? present->display_height : 480;
+        width = present->window_width ? present->window_width : 640;
+        height = present->window_height ? present->window_height : 480;
     } else {
         get_client_size(present->hwnd, &width, &height);
     }
@@ -418,6 +418,13 @@ void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t h
     present->display_height = height;
 }
 
+void sr_present_set_window_size(sr_present *present, uint32_t width, uint32_t height)
+{
+    if (!present) return;
+    present->window_width = width;
+    present->window_height = height;
+}
+
 void sr_present_draw(sr_present *present)
 {
     int width;
@@ -434,8 +441,8 @@ void sr_present_draw(sr_present *present)
     }
 
     if (present->external_context) {
-        width = present->display_width ? present->display_width : 640;
-        height = present->display_height ? present->display_height : 480;
+        width = present->window_width ? present->window_width : 640;
+        height = present->window_height ? present->window_height : 480;
     } else {
         get_client_size(present->hwnd, &width, &height);
     }

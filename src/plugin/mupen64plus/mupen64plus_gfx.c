@@ -321,7 +321,8 @@ EXPORT int CALL RomOpen(void)
         return 0;
     }
 
-    sr_present_set_display_size(&g_present, (uint32_t)g_win_width, (uint32_t)g_win_height);
+    sr_present_set_window_size(&g_present, (uint32_t)g_win_width, (uint32_t)g_win_height);
+    sr_present_set_display_size(&g_present, 640, 480);
     sr_present_clear(&g_present);
 
     return 1;
@@ -360,7 +361,10 @@ EXPORT void CALL UpdateScreen(void)
                 if (sr_update_screen(g_context, &out_fb) == SR_OK && out_fb.valid) {
                     g_frame_width = out_fb.width;
                     g_frame_height = out_fb.height;
-                    sr_present_set_display_size(&g_present, (uint32_t)g_win_width, (uint32_t)g_win_height);
+                    uint32_t display_width = vi_info.display_width ? vi_info.display_width : vi_info.width;
+                    uint32_t display_height = vi_info.display_height ? vi_info.display_height : vi_info.height;
+                    sr_present_set_window_size(&g_present, (uint32_t)g_win_width, (uint32_t)g_win_height);
+                    sr_present_set_display_size(&g_present, display_width, display_height);
                     sr_present_upload_rgba8(&g_present, g_frame_pixels, out_fb.width, out_fb.height, out_fb.stride_pixels);
                     valid = true;
                 }
@@ -421,6 +425,7 @@ EXPORT void CALL ResizeVideoOutput(int width, int height)
 {
     g_win_width = width;
     g_win_height = height;
+    sr_present_set_window_size(&g_present, (uint32_t)width, (uint32_t)height);
 }
 
 EXPORT void CALL FBWrite(unsigned int addr, unsigned int size)

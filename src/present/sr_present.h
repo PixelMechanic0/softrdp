@@ -23,6 +23,8 @@ typedef struct sr_present {
     uint32_t frame_height;
     uint32_t display_width;
     uint32_t display_height;
+    uint32_t window_width;
+    uint32_t window_height;
     bool ready;
     bool has_frame;
     bool external_context;
@@ -33,6 +35,7 @@ bool sr_present_init_external(sr_present *present, void *(*load_proc)(const char
 void sr_present_shutdown(sr_present *present);
 void sr_present_clear(sr_present *present);
 void sr_present_set_display_size(sr_present *present, uint32_t width, uint32_t height);
+void sr_present_set_window_size(sr_present *present, uint32_t width, uint32_t height);
 void sr_present_draw(sr_present *present);
 bool sr_present_upload_rgba8(sr_present *present,
                              const sr_rgba8 *pixels,
