@@ -41,6 +41,7 @@ typedef struct vi_scanout_plan {
     vi_scanout_state state;
     uint32_t origin;
     uint32_t source_stride;
+    uint32_t source_width;
     uint32_t bytes_per_pixel;
     uint32_t output_width;
     uint32_t output_height;

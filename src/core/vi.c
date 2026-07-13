@@ -129,7 +129,8 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
         if (plan->y_samples[y].source_y > max_y) max_y = plan->y_samples[y].source_y;
     }
 
-    if (max_x >= source_stride) return;
+    if (max_x >= VI_MAX_SOURCE_WIDTH) return;
+    plan->source_width = max_x + 1u;
 
     const bool interpolate = plan->aa_mode != VI_AA_REPLICATE;
     if (interpolate) max_y++;
@@ -152,7 +153,7 @@ static sr_result decode_row(const vi_scanout_plan *plan,
     const uint64_t row_base = (uint64_t)plan->origin +
                               (uint64_t)source_y * plan->source_stride *
                               plan->bytes_per_pixel;
-    for (uint32_t x = 0; x < plan->source_stride; x++) {
+    for (uint32_t x = 0; x < plan->source_width; x++) {
         const uint32_t address = (uint32_t)(row_base +
                                  (uint64_t)x * plan->bytes_per_pixel);
         if (plan->bytes_per_pixel == 2u) {
@@ -242,7 +243,7 @@ sr_result vi_execute_scanout(const vi_scanout_plan *plan,
             const vi_x_sample xs = plan->x_samples[x];
             sr_rgba8 color = row0[xs.source_x];
             if (interpolate && xs.fraction) {
-                const uint32_t next_x = xs.source_x + 1u < plan->source_stride ?
+                const uint32_t next_x = xs.source_x + 1u < plan->source_width ?
                                         xs.source_x + 1u : xs.source_x;
                 color = lerp_color(color, row0[next_x],
                                    xs.fraction);
@@ -250,7 +251,7 @@ sr_result vi_execute_scanout(const vi_scanout_plan *plan,
             if (row1) {
                 sr_rgba8 lower = row1[xs.source_x];
                 if (interpolate && xs.fraction) {
-                    const uint32_t next_x = xs.source_x + 1u < plan->source_stride ?
+                    const uint32_t next_x = xs.source_x + 1u < plan->source_width ?
                                             xs.source_x + 1u : xs.source_x;
                     lower = lerp_color(lower, row1[next_x],
                                        xs.fraction);
