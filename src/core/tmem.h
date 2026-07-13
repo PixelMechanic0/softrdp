@@ -490,6 +490,20 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
 
     if (tile->format == RDP_FORMAT_IA) {
         switch (tile->size) {
+        case RDP_SIZE_4BPP: {
+            if (address.bytes != 1) {
+                return false;
+            }
+            const uint8_t packed = tmem->bytes[address.byte];
+            const uint8_t texel = address.subtexel ? (packed & 0xfu) : (packed >> 4);
+            const uint8_t intensity_bits = texel & 0xeu;
+            const uint8_t intensity = (uint8_t)((intensity_bits << 4) |
+                                                (intensity_bits << 1) |
+                                                (intensity_bits >> 2));
+            const uint8_t alpha = (texel & 1u) ? 0xffu : 0u;
+            *color = (rdp_color){ intensity, intensity, intensity, alpha };
+            return true;
+        }
         case RDP_SIZE_8BPP: {
             if (address.bytes != 1) {
                 return false;
