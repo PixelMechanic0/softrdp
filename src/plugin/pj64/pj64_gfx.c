@@ -28,6 +28,13 @@ static uint32_t g_process_rdp_calls;
 static uint32_t g_update_screen_calls;
 static uint32_t g_uploaded_frames;
 
+static bool g_fullscreen = false;
+#ifdef _WIN32
+static HMENU g_old_menu = NULL;
+static LONG g_old_style = 0;
+static WINDOWPLACEMENT g_old_pos;
+#endif
+
 static bool g_dump_requested = false;
 static bool g_record_active = false;
 static FILE* g_frame_dump_file = NULL;
@@ -387,7 +394,7 @@ static sr_host_interface make_host_interface(GFX_INFO *gfx)
 static void ensure_window_size(HWND hwnd)
 {
 #ifdef _WIN32
-    if (!hwnd) {
+    if (!hwnd || g_fullscreen) {
         return;
     }
     RECT rect;
@@ -634,6 +641,9 @@ static void log_perf_summary(const char *header)
 
 static void stop_runtime(void)
 {
+    if (g_fullscreen) {
+        ChangeWindow();
+    }
 #if SOFTRDP_ENABLE_PERF_LOG
     log_perf_summary("Shutdown");
 #endif
@@ -679,6 +689,68 @@ void PJ64_CALL CaptureScreen(char *directory)
 
 void PJ64_CALL ChangeWindow(void)
 {
+#ifdef _WIN32
+    HWND hwnd = g_gfx.hWnd;
+    if (!hwnd || !IsWindow(hwnd)) {
+        return;
+    }
+
+    g_fullscreen = !g_fullscreen;
+
+    if (g_fullscreen) {
+        // hide cursor
+        ShowCursor(FALSE);
+
+        // hide status bar
+        if (g_gfx.hStatusBar) {
+            ShowWindow(g_gfx.hStatusBar, SW_HIDE);
+        }
+
+        // disable menu and save it to restore it later
+        g_old_menu = GetMenu(hwnd);
+        if (g_old_menu) {
+            SetMenu(hwnd, NULL);
+        }
+
+        // save old window position and size
+        g_old_pos.length = sizeof(g_old_pos);
+        GetWindowPlacement(hwnd, &g_old_pos);
+
+        // use virtual screen dimensions for fullscreen mode
+        int32_t vs_width = GetSystemMetrics(SM_CXSCREEN);
+        int32_t vs_height = GetSystemMetrics(SM_CYSCREEN);
+
+        // disable all styles to get a borderless window and save it to restore it later
+        g_old_style = GetWindowLongA(hwnd, GWL_STYLE);
+        LONG style = WS_VISIBLE | WS_POPUP;
+        SetWindowLongA(hwnd, GWL_STYLE, style);
+
+        // resize window so it covers the entire virtual screen
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, vs_width, vs_height, SWP_SHOWWINDOW);
+    }
+    else {
+        // restore cursor
+        ShowCursor(TRUE);
+
+        // restore status bar
+        if (g_gfx.hStatusBar) {
+            ShowWindow(g_gfx.hStatusBar, SW_SHOW);
+        }
+
+        // restore menu
+        if (g_old_menu) {
+            SetMenu(hwnd, g_old_menu);
+            g_old_menu = NULL;
+        }
+
+        // restore style
+        SetWindowLongA(hwnd, GWL_STYLE, g_old_style);
+
+        // restore window size and position
+        g_old_pos.length = sizeof(g_old_pos);
+        SetWindowPlacement(hwnd, &g_old_pos);
+    }
+#endif
 }
 
 BOOL PJ64_CALL InitiateGFX(GFX_INFO gfx_info)
