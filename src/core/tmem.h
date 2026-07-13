@@ -470,9 +470,11 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         return false;
     }
 
+    /* With TLUT enabled the RDP reinterprets every non-YUV 4/8-bit texel as
+     * a palette index, irrespective of the nominal tile format. */
     const bool indexed_tlut = sample->tlut_enable &&
-        (tile->format == RDP_FORMAT_CI ||
-         (tile->format == RDP_FORMAT_RGBA && tile->size == RDP_SIZE_8BPP));
+        tile->format != RDP_FORMAT_YUV &&
+        (tile->size == RDP_SIZE_4BPP || tile->size == RDP_SIZE_8BPP);
     if (indexed_tlut) {
         uint32_t index;
         if (tile->size == RDP_SIZE_4BPP && address.bytes == 1) {
