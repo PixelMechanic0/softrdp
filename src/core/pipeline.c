@@ -195,6 +195,88 @@ static inline bool sample_compiled_texture(const tmem_state *tmem,
     }
 }
 
+template <rdp_block_sampler_kind Sampler>
+static void sample_triangle_texture_block(
+    const rdp_primitive_state *primitive,
+    const raster_decoded_triangle *decoded,
+    rdp_fragment_block *block,
+    const int32_t next_s[RDP_PACKET_LANES],
+    const int32_t next_t[RDP_PACKET_LANES],
+    const int32_t next_y_s[RDP_PACKET_LANES],
+    const int32_t next_y_t[RDP_PACKET_LANES],
+    const bool lod_clamp[RDP_PACKET_LANES],
+    uint32_t count,
+    bool uses_lod)
+{
+    const rdp_color_pipeline_state *color = &primitive->color;
+    const tmem_state *tmem = primitive->tmem;
+    for (uint32_t lane = 0; lane < count; lane++) {
+        const uint16_t bit = (uint16_t)(1u << lane);
+        if (!(block->active_mask & bit)) continue;
+        const int32_t s = block->sample_s[lane], t = block->sample_t[lane];
+        const rdp_texture_sample_state *texture0 = &primitive->texture;
+        const rdp_texture_sample_state *texture1 = &primitive->texture_cycle1;
+        if (uses_lod) {
+            const rdp_lod_result lod = color->cycle_type == RDP_CYCLE_1
+                ? resolve_lod(primitive, next_s[lane], next_t[lane],
+                    next_y_s[lane], next_y_t[lane], next_s[lane], next_t[lane],
+                    lod_clamp[lane])
+                : resolve_lod(primitive, s, t, next_s[lane], next_t[lane],
+                    next_y_s[lane], next_y_t[lane], lod_clamp[lane]);
+            block->lod_fraction[lane] = lod.fraction;
+            texture0 = &primitive->lod_textures[lod.tile0];
+            texture1 = &primitive->lod_textures_cycle1[lod.tile1];
+        }
+        rdp_color texel0, texel1;
+        const bool ok0 = !color->needs_texel0 ||
+            sample_compiled_texture<Sampler>(tmem, texture0, s, t, &texel0);
+        const bool ok1 = !color->needs_texel1 ||
+            tmem_sample_color_fixed5(tmem, texture1, s, t, &texel1);
+        if (ok0 && ok1) {
+            if (color->needs_texel0) store_texel(block->texel0, lane, texel0);
+            if (color->needs_texel1) store_texel(block->texel1, lane, texel1);
+            if (!color->needs_texel1 && color->needs_texel0)
+                store_texel(block->texel1, lane, texel0);
+            if (!color->needs_texel0 && color->needs_texel1)
+                store_texel(block->texel0, lane, texel1);
+        } else if (decoded->has_shade) {
+            block->fallback_mask |= bit;
+        } else {
+            block->active_mask &= (uint16_t)~bit;
+        }
+    }
+    if (!color->needs_next_texel0) return;
+    for (uint32_t lane = 0; lane < count; lane++) {
+        const uint16_t bit = (uint16_t)(1u << lane);
+        if (!(block->active_mask & bit)) continue;
+        const uint16_t next_bit = (uint16_t)(bit << 1);
+        if (lane + 1u < count && (block->active_mask & next_bit) &&
+            !(block->fallback_mask & next_bit)) {
+            for (uint32_t component = 0; component < 4u; component++)
+                block->next_texel0[component][lane] =
+                    block->texel0[component][lane + 1u];
+            continue;
+        }
+        const rdp_texture_sample_state *lookahead_texture = &primitive->texture;
+        if (uses_lod) {
+            const rdp_lod_result lod = resolve_lod(primitive,
+                block->sample_s[lane], block->sample_t[lane],
+                next_s[lane], next_t[lane], next_y_s[lane], next_y_t[lane],
+                lod_clamp[lane]);
+            lookahead_texture = &primitive->lod_textures[lod.tile0];
+        }
+        rdp_color next_texel0;
+        if (sample_compiled_texture<Sampler>(tmem, lookahead_texture,
+                next_s[lane], next_t[lane], &next_texel0)) {
+            store_texel(block->next_texel0, lane, next_texel0);
+        } else if (decoded->has_shade) {
+            block->fallback_mask |= bit;
+        } else {
+            block->active_mask &= (uint16_t)~bit;
+        }
+    }
+}
+
 static inline int32_t rectangle_sample_coord(int32_t base, int32_t step,
                                              uint32_t index, uint8_t shift)
 {
@@ -475,9 +557,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     }
 
     const raster_decoded_triangle *decoded = &primitive->triangle;
-    const rdp_texture_sample_state *texture = &primitive->texture;
     const rdp_color_pipeline_state *color_pipeline = &primitive->color;
-    const tmem_state *tmem = primitive->tmem;
     rdp_span_work cursor = *work;
     const int total = work->x_end - work->x_begin + 1;
 
@@ -608,71 +688,33 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     }
                 }
             }
-            for (uint32_t lane = 0; lane < count; lane++) {
-                const uint16_t bit = (uint16_t)(1u << lane);
-                if (!(block.active_mask & bit)) continue;
-                const int32_t s = block.sample_s[lane], t = block.sample_t[lane];
-                const rdp_texture_sample_state *texture0 = texture;
-                const rdp_texture_sample_state *texture1 = &primitive->texture_cycle1;
-                if (uses_lod) {
-                    const rdp_lod_result lod = color_pipeline->cycle_type == RDP_CYCLE_1
-                        ? resolve_lod(primitive, next_s[lane], next_t[lane],
-                            next_y_s[lane], next_y_t[lane], next_s[lane], next_t[lane],
-                            lod_clamp[lane])
-                        : resolve_lod(primitive, s, t, next_s[lane], next_t[lane],
-                            next_y_s[lane], next_y_t[lane], lod_clamp[lane]);
-                    block.lod_fraction[lane] = lod.fraction;
-                    texture0 = &primitive->lod_textures[lod.tile0];
-                    texture1 = &primitive->lod_textures_cycle1[lod.tile1];
-                }
-                rdp_color texel0, texel1;
-                const bool ok0 = !color_pipeline->needs_texel0 ||
-                    tmem_sample_color_fixed5(tmem, texture0, s, t, &texel0);
-                const bool ok1 = !color_pipeline->needs_texel1 ||
-                    tmem_sample_color_fixed5(tmem, texture1, s, t, &texel1);
-                if (ok0 && ok1) {
-                    if (color_pipeline->needs_texel0) store_texel(block.texel0, lane, texel0);
-                    if (color_pipeline->needs_texel1) store_texel(block.texel1, lane, texel1);
-                    if (!color_pipeline->needs_texel1 && color_pipeline->needs_texel0)
-                        store_texel(block.texel1, lane, texel0);
-                    if (!color_pipeline->needs_texel0 && color_pipeline->needs_texel1)
-                        store_texel(block.texel0, lane, texel1);
-                } else if (decoded->has_shade) {
-                    block.fallback_mask |= bit;
-                } else {
-                    block.active_mask &= (uint16_t)~bit;
-                }
-            }
-            if (color_pipeline->needs_next_texel0) {
-                for (uint32_t lane = 0; lane < count; lane++) {
-                    const uint16_t bit = (uint16_t)(1u << lane);
-                    if (!(block.active_mask & bit)) continue;
-                    const uint16_t next_bit = (uint16_t)(bit << 1);
-                    if (lane + 1u < count && (block.active_mask & next_bit) &&
-                        !(block.fallback_mask & next_bit)) {
-                        for (uint32_t component = 0; component < 4u; component++)
-                            block.next_texel0[component][lane] =
-                                block.texel0[component][lane + 1u];
-                        continue;
-                    }
-
-                    const rdp_texture_sample_state *lookahead_texture = texture;
-                    if (uses_lod) {
-                        const rdp_lod_result lod = resolve_lod(primitive,
-                            block.sample_s[lane], block.sample_t[lane],
-                            next_s[lane], next_t[lane], next_y_s[lane],
-                            next_y_t[lane], lod_clamp[lane]);
-                        lookahead_texture = &primitive->lod_textures[lod.tile0];
-                    }
-                    rdp_color next_texel0;
-                    if (tmem_sample_color_fixed5(tmem, lookahead_texture,
-                            next_s[lane], next_t[lane], &next_texel0)) {
-                        store_texel(block.next_texel0, lane, next_texel0);
-                    } else if (decoded->has_shade) {
-                        block.fallback_mask |= bit;
-                    } else {
-                        block.active_mask &= (uint16_t)~bit;
-                    }
+            if (uses_lod) {
+                sample_triangle_texture_block<RDP_BLOCK_SAMPLER_GENERIC>(
+                    primitive, decoded, &block, next_s, next_t, next_y_s,
+                    next_y_t, lod_clamp, count, true);
+            } else {
+                switch (primitive->block_plan.sampler) {
+                case RDP_BLOCK_SAMPLER_RGBA16_POINT:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_POINT>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
+                case RDP_BLOCK_SAMPLER_RGBA16_BILERP:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
+                case RDP_BLOCK_SAMPLER_I4_BILERP:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_I4_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
+                case RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
+                case RDP_BLOCK_SAMPLER_I8_BILERP:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_I8_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
+                case RDP_BLOCK_SAMPLER_IA8_BILERP:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_IA8_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
+                default:
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_GENERIC>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    break;
                 }
             }
         }

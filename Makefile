@@ -17,9 +17,10 @@ PJ64_CXX ?= i686-w64-mingw32-g++
 CFLAGS ?= -O3 -g -flto
 CFLAGS += -mavx2 -std=c17 -Wall -Wextra -Wpedantic -MMD -MP -Isrc
 CXXFLAGS ?= -O3 -g -flto
-CXXFLAGS += -mavx2 -std=gnu++20 -Wno-narrowing -Wno-c99-extensions \
+CXXFLAGS += -mavx2 -std=gnu++20 -Drestrict=__restrict -Wall -Wextra -Wpedantic \
+	-Wno-narrowing -Wno-c99-extensions \
 	-Wno-missing-field-initializers -Wno-missing-designated-field-initializers \
-	-Wno-missing-braces -Drestrict=__restrict -Wall -Wextra -Wpedantic -MMD -MP -Isrc
+	-Wno-missing-braces -MMD -MP -Isrc
 SOFTRDP_LOG ?= 0
 CFLAGS += -DSOFTRDP_ENABLE_LOG=$(SOFTRDP_LOG)
 CXXFLAGS += -DSOFTRDP_ENABLE_LOG=$(SOFTRDP_LOG)
