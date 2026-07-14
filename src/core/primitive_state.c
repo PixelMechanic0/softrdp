@@ -113,6 +113,17 @@ static void pipeline_compile_texture(rdp_texture_sample_state *texture,
     uint32_t texture_stride;
     if (tmem_tile_sample_layout(tmem, texture, &texture_width,
                                 &texture_height, &texture_stride)) {
+        /* A masked axis addresses the mask period directly in TMEM. Tile
+         * bounds and recorded load footprints are clamp metadata, not a hard
+         * limit for wrapped/reinterpreted render tiles. */
+        if (!texture->tile.clamp_s && texture->tile.mask_s) {
+            const uint32_t period = 1u << texture->tile.mask_s;
+            if (texture_width < period) texture_width = period;
+        }
+        if (!texture->tile.clamp_t && texture->tile.mask_t) {
+            const uint32_t period = 1u << texture->tile.mask_t;
+            if (texture_height < period) texture_height = period;
+        }
         texture->width = (uint16_t)texture_width;
         texture->height = (uint16_t)texture_height;
         texture->stride = (uint16_t)texture_stride;
