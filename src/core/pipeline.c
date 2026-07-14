@@ -168,36 +168,6 @@ static void store_texel(uint16_t destination[4][RDP_PACKET_LANES],
     destination[3][lane] = texel.a;
 }
 
-static inline uint8_t triangle_coverage_mask(const rdp_span_work *work, int x)
-{
-    static const uint8_t sample_x[4][2] = {
-        { 0u, 4u }, { 2u, 6u }, { 0u, 4u }, { 2u, 6u }
-    };
-    if (x >= work->coverage_full_x0 && x <= work->coverage_full_x1)
-        return 0xffu;
-
-    const int32_t base = x * 8;
-    uint8_t mask = 0u;
-    for (uint32_t row = 0; row < 4u; row++) {
-        if (!(work->coverage_valid_rows & (1u << row))) continue;
-        for (uint32_t sample = 0; sample < 2u; sample++) {
-            const int32_t position = base + sample_x[row][sample];
-            if (position >= work->coverage_left[row] &&
-                position < work->coverage_right[row])
-                mask |= (uint8_t)(1u << (row * 2u + sample));
-        }
-    }
-    return mask;
-}
-
-static inline uint8_t coverage_count(uint8_t mask)
-{
-    static const uint8_t nibble_count[16] = {
-        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
-    };
-    return (uint8_t)(nibble_count[mask & 0xfu] + nibble_count[mask >> 4]);
-}
-
 typedef struct rdp_depth_result {
     bool pass;
     bool update;
@@ -338,12 +308,6 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
     const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
     for (uint32_t lane = 0; lane < count; lane++) {
         block->x[lane] = cursor->x_begin + (int)lane;
-        const uint8_t coverage_mask = triangle_coverage_mask(cursor, block->x[lane]);
-        block->coverage_mask[lane] = coverage_mask;
-        block->coverage[lane] = coverage_count(coverage_mask);
-        if (!coverage_mask ||
-            (!primitive->fragment.antialias && !(coverage_mask & 1u)))
-            block->active_mask &= (uint16_t)~(1u << lane);
         block->color_address[lane] = first_color_address + lane * primitive->framebuffer.bytes_per_pixel;
         block->depth_fixed[lane] = cursor->depth_fixed + (int64_t)lane * decoded->depth.dzdx;
         block->s[lane] = (int32_t)((uint32_t)cursor->s_fixed + lane * (uint32_t)decoded->texture.dsdx);
@@ -405,7 +369,6 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
 
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_FILL) {
             for (uint32_t lane = 0; lane < count; lane++) {
-                if (!(block.active_mask & (uint16_t)(1u << lane))) continue;
                 const sr_result result = framebuffer_write_fill_pixel(memory,
                     &primitive->framebuffer, (uint32_t)block.x[lane], (uint32_t)work->y);
                 if (result != SR_OK) return result;
@@ -569,8 +532,6 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
             : (uint16_t)((1u << count) - 1u);
         for (uint32_t lane = 0; lane < count; lane++) {
             packet.lod_fraction[lane] = 0u;
-            packet.coverage_mask[lane] = 0xffu;
-            packet.coverage[lane] = 8u;
             /* Texture rectangles carry no shade coefficients. The RDP
              * edgewalker supplies zero RGBA shade attributes for every lane.
              */

@@ -44,7 +44,6 @@ typedef struct rdp_fragment_block {
     uint16_t color[4][RDP_PACKET_LANES];
     uint16_t lod_fraction[RDP_PACKET_LANES];
     uint16_t alpha[RDP_PACKET_LANES];
-    uint8_t coverage_mask[RDP_PACKET_LANES];
     uint8_t coverage[RDP_PACKET_LANES];
 } rdp_fragment_block;
 
