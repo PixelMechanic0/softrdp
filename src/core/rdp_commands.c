@@ -204,9 +204,18 @@ sr_result rdp_decode_command(rdp_command *cmd)
     case RDP_CMD_SYNC_PIPE:
     case RDP_CMD_SYNC_TILE:
     case RDP_CMD_SYNC_FULL:
-    case RDP_CMD_SET_CONVERT:
+    case RDP_CMD_SET_CONVERT:                     return SR_OK;
+
     case RDP_CMD_SET_KEY_GB:
-    case RDP_CMD_SET_KEY_R:                       return SR_OK;
+        cmd->decoded.set_key.center.g = (uint8_t)(w1 >> 24);
+        cmd->decoded.set_key.scale.g = (uint8_t)(w1 >> 16);
+        cmd->decoded.set_key.center.b = (uint8_t)(w1 >> 8);
+        cmd->decoded.set_key.scale.b = (uint8_t)w1;
+        return SR_OK;
+    case RDP_CMD_SET_KEY_R:
+        cmd->decoded.set_key.center.r = (uint8_t)(w1 >> 8);
+        cmd->decoded.set_key.scale.r = (uint8_t)w1;
+        return SR_OK;
 
     case RDP_CMD_SET_COLOR_IMAGE:                 decode_set_image(&cmd->decoded.set_color_image, w0, w1); return SR_OK;
     case RDP_CMD_SET_TEXTURE_IMAGE:               decode_set_image(&cmd->decoded.set_texture_image, w0, w1); return SR_OK;
@@ -297,6 +306,16 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_SET_ENV_COLOR:                   state->environment_color = cmd->decoded.set_env_color.color; return SR_OK;
     case RDP_CMD_SET_PRIM_COLOR:                  state->primitive_min_lod = cmd->decoded.set_prim_color.min_lod; state->primitive_lod_fraction = cmd->decoded.set_prim_color.lod_fraction; state->primitive_color = cmd->decoded.set_prim_color.color; return SR_OK;
     case RDP_CMD_SET_PRIM_DEPTH:                  state->primitive_depth = cmd->decoded.set_prim_depth.depth; state->primitive_delta_z = cmd->decoded.set_prim_depth.delta_z; return SR_OK;
+    case RDP_CMD_SET_KEY_GB:
+        state->key_center.g = cmd->decoded.set_key.center.g;
+        state->key_scale.g = cmd->decoded.set_key.scale.g;
+        state->key_center.b = cmd->decoded.set_key.center.b;
+        state->key_scale.b = cmd->decoded.set_key.scale.b;
+        return SR_OK;
+    case RDP_CMD_SET_KEY_R:
+        state->key_center.r = cmd->decoded.set_key.center.r;
+        state->key_scale.r = cmd->decoded.set_key.scale.r;
+        return SR_OK;
 
     case RDP_CMD_FILL_TRIANGLE:
     case RDP_CMD_FILL_ZBUFFER_TRIANGLE:
@@ -345,9 +364,6 @@ sr_result rdp_execute_command(sr_memory *memory,
         state->convert_k5 = (int32_t)(cmd->words[1] & 0x1ffu);
         return SR_OK;
     }
-
-    case RDP_CMD_SET_KEY_GB:
-    case RDP_CMD_SET_KEY_R:                       return SR_OK;
 
     default:                                      return SR_ERROR_BAD_COMMAND;
     }

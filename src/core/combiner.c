@@ -158,6 +158,8 @@ static int32_t source_component(rdp_combiner_source source,
     case RDP_COMBINER_SHADE_ALPHA:      return in->shade.a;
     case RDP_COMBINER_ENVIRONMENT_RGB:  color = &in->environment; break;
     case RDP_COMBINER_ENVIRONMENT_ALPHA:return in->environment.a;
+    case RDP_COMBINER_KEY_CENTER:        color = &in->key_center; break;
+    case RDP_COMBINER_KEY_SCALE:         color = &in->key_scale; break;
     case RDP_COMBINER_LOD_FRACTION:     return in->lod_fraction;
     case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: return in->primitive_lod_fraction;
     case RDP_COMBINER_K4:               return in->k4;
@@ -278,6 +280,16 @@ static inline __m256i simd_load_source(uint32_t source,
         return _mm256_set1_epi32(val);
     }
     case RDP_COMBINER_ENVIRONMENT_ALPHA: return _mm256_set1_epi32(state->environment_color.a);
+    case RDP_COMBINER_KEY_CENTER: {
+        const uint32_t val = component == 0 ? state->key_center.r :
+                             component == 1 ? state->key_center.g : state->key_center.b;
+        return _mm256_set1_epi32(val);
+    }
+    case RDP_COMBINER_KEY_SCALE: {
+        const uint32_t val = component == 0 ? state->key_scale.r :
+                             component == 1 ? state->key_scale.g : state->key_scale.b;
+        return _mm256_set1_epi32(val);
+    }
     case RDP_COMBINER_LOD_FRACTION: return load_extend_8(&packet->lod_fraction[offset]);
     case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: return _mm256_set1_epi32(state->primitive_lod_fraction);
     case RDP_COMBINER_K4: return _mm256_set1_epi32(state->convert_k4);

@@ -186,6 +186,8 @@ typedef struct rdp_state {
     int32_t convert_k3_tf;
     int32_t convert_k4;
     int32_t convert_k5;
+    rdp_color key_center;
+    rdp_color key_scale;
 } rdp_state;
 
 /* Draw-local snapshots consumed by individual software pipeline stages. */
@@ -241,6 +243,8 @@ typedef struct rdp_color_pipeline_state {
     rdp_combiner_program program;
     rdp_color primitive_color;
     rdp_color environment_color;
+    rdp_color key_center;
+    rdp_color key_scale;
     rdp_cycle_type cycle_type;
     bool two_cycle;
     uint8_t primitive_lod_fraction;

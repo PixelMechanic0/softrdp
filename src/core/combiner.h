@@ -11,6 +11,8 @@ typedef struct rdp_combiner_inputs {
     rdp_color texel1;
     rdp_color primitive;
     rdp_color environment;
+    rdp_color key_center;
+    rdp_color key_scale;
     uint16_t lod_fraction;
     uint8_t primitive_lod_fraction;
     uint16_t k4;

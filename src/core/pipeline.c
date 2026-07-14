@@ -292,6 +292,12 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
     block->fallback_mask = 0u;
     block->depth_update_mask = 0u;
     block->y = (uint32_t)cursor->y;
+    if (!(primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE)) {
+        if (primitive->color.needs_texel0)
+            memset(block->texel0, 0, sizeof(block->texel0));
+        if (primitive->color.needs_texel1)
+            memset(block->texel1, 0, sizeof(block->texel1));
+    }
     const uint32_t first_pixel = (uint32_t)cursor->y * primitive->framebuffer.color_image.width +
                                  (uint32_t)cursor->x_begin;
     const uint32_t first_color_address = primitive->framebuffer.color_image.address +

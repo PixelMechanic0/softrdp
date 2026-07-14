@@ -36,6 +36,16 @@ typedef struct sr_state_snapshot {
     tmem_state tmem;
 } sr_state_snapshot;
 
+/* SRS1 dumps made before chroma-key combiner state was retained. The new
+ * fields were appended to rdp_state, so the old payload can be migrated
+ * without interpreting its internal members. */
+typedef struct sr_state_snapshot_legacy {
+    uint32_t magic;
+    uint32_t size;
+    uint8_t rdp[offsetof(rdp_state, key_center)];
+    tmem_state tmem;
+} sr_state_snapshot_legacy;
+
 #define DP_STATUS_XBUS_DMA 0x001u
 #define DP_INTERRUPT 0x20u
 #define MAX_RDP_LIST_BYTES (1024u * 1024u)
@@ -65,7 +75,18 @@ sr_result sr_save_state(const sr_context *ctx, void *data, size_t size)
 
 sr_result sr_load_state(sr_context *ctx, const void *data, size_t size)
 {
-    if (!ctx || !data || size != sizeof(sr_state_snapshot)) return SR_ERROR_INVALID_ARGUMENT;
+    if (!ctx || !data) return SR_ERROR_INVALID_ARGUMENT;
+    if (size == sizeof(sr_state_snapshot_legacy)) {
+        sr_state_snapshot_legacy legacy;
+        memcpy(&legacy, data, sizeof(legacy));
+        if (legacy.magic != SR_STATE_SNAPSHOT_MAGIC || legacy.size != sizeof(legacy))
+            return SR_ERROR_INVALID_ARGUMENT;
+        memset(&ctx->rdp, 0, sizeof(ctx->rdp));
+        memcpy(&ctx->rdp, legacy.rdp, sizeof(legacy.rdp));
+        ctx->tmem = legacy.tmem;
+        return SR_OK;
+    }
+    if (size != sizeof(sr_state_snapshot)) return SR_ERROR_INVALID_ARGUMENT;
     sr_state_snapshot snapshot;
     memcpy(&snapshot, data, sizeof(snapshot));
     if (snapshot.magic != SR_STATE_SNAPSHOT_MAGIC || snapshot.size != sizeof(snapshot))

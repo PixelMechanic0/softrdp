@@ -124,6 +124,11 @@ typedef struct rdp_set_prim_depth_cmd {
     uint16_t depth, delta_z;
 } rdp_set_prim_depth_cmd;
 
+typedef struct rdp_set_key_cmd {
+    rdp_color center;
+    rdp_color scale;
+} rdp_set_key_cmd;
+
 typedef rdp_combiner_program rdp_set_combine_cmd;
 
 typedef struct rdp_rect_cmd {
@@ -161,6 +166,7 @@ typedef struct rdp_command {
         rdp_set_color_cmd set_env_color;
         rdp_set_prim_color_cmd set_prim_color;
         rdp_set_prim_depth_cmd set_prim_depth;
+        rdp_set_key_cmd set_key;
         rdp_set_combine_cmd set_combine;
         raster_decoded_triangle triangle;
         rdp_rect_cmd rect;

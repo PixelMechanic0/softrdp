@@ -172,6 +172,8 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.program = registers->combiner;
     primitive->color.primitive_color = registers->primitive_color;
     primitive->color.environment_color = registers->environment_color;
+    primitive->color.key_center = registers->key_center;
+    primitive->color.key_scale = registers->key_scale;
     primitive->color.cycle_type = registers->other_modes.cycle_type;
     primitive->color.two_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2;
     primitive->color.primitive_lod_fraction = registers->primitive_lod_fraction;
