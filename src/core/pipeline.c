@@ -1,9 +1,11 @@
-#include "pipeline.h"
 #include <string.h>
+extern "C" {
+#include "pipeline.h"
 #include "framebuffer.h"
 #include "rdp_memory.h"
 #include "tmem.h"
 #include "fragment.h"
+}
 
 pipeline_outputs pipeline_combine_pixel(const rdp_color_pipeline_state *state, const pipeline_inputs *inputs)
 {
@@ -171,6 +173,26 @@ static void store_texel(uint16_t destination[4][RDP_PACKET_LANES],
     destination[1][lane] = texel.g;
     destination[2][lane] = texel.b;
     destination[3][lane] = texel.a;
+}
+
+template <rdp_block_sampler_kind Sampler>
+static inline bool sample_compiled_texture(const tmem_state *tmem,
+                                           const rdp_texture_sample_state *sample,
+                                           int32_t s, int32_t t,
+                                           rdp_color *color)
+{
+    if constexpr (Sampler == RDP_BLOCK_SAMPLER_RGBA16_BILERP) {
+        return tmem_sample_rgba16_bilerp_fixed5(tmem, sample, s, t, color);
+    } else if constexpr (Sampler == RDP_BLOCK_SAMPLER_RGBA16_POINT) {
+        return tmem_sample_rgba16_point_fixed5(tmem, sample, s, t, color);
+    } else if constexpr (Sampler == RDP_BLOCK_SAMPLER_I4_BILERP ||
+                         Sampler == RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP ||
+                         Sampler == RDP_BLOCK_SAMPLER_I8_BILERP ||
+                         Sampler == RDP_BLOCK_SAMPLER_IA8_BILERP) {
+        return tmem_sample_compact_bilerp_fixed5(tmem, sample, s, t, color);
+    } else {
+        return tmem_sample_color_fixed5(tmem, sample, s, t, color);
+    }
 }
 
 static inline int32_t rectangle_sample_coord(int32_t base, int32_t step,
@@ -678,7 +700,9 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     return SR_OK;
 }
 
-sr_result pipeline_render_rectangle_span(sr_memory *memory,
+template <rdp_block_sampler_kind Sampler>
+static sr_result pipeline_render_rectangle_span_specialized(
+                                         sr_memory *memory,
                                          const rdp_primitive_state *primitive,
                                          const rdp_span_work *work)
 {
@@ -723,8 +747,8 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     work->dtdx_fixed, offset + lane, work->texture_coord_shift);
                 rdp_color texel0, texel1;
                 const bool ok0 = !color->needs_texel0 ||
-                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
-                                             s, t, &texel0);
+                    sample_compiled_texture<Sampler>(primitive->tmem,
+                                             &primitive->texture, s, t, &texel0);
                 const bool ok1 = !color->needs_texel1 ||
                     tmem_sample_color_fixed5(primitive->tmem, &primitive->texture_cycle1,
                                              s, t, &texel1);
@@ -757,7 +781,7 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                         work->dtdx_fixed, offset + lane + 1u,
                         work->texture_coord_shift);
                     rdp_color next_texel0;
-                    if (tmem_sample_color_fixed5(primitive->tmem,
+                    if (sample_compiled_texture<Sampler>(primitive->tmem,
                             &primitive->texture, next_s, next_t, &next_texel0)) {
                         store_texel(packet.next_texel0, lane, next_texel0);
                     } else {
@@ -807,6 +831,29 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
     }
 
     return SR_OK;
+}
+
+sr_result pipeline_render_rectangle_span(sr_memory *memory,
+                                         const rdp_primitive_state *primitive,
+                                         const rdp_span_work *work)
+{
+    if (!primitive) return SR_ERROR_INVALID_ARGUMENT;
+    switch (primitive->block_plan.sampler) {
+    case RDP_BLOCK_SAMPLER_RGBA16_POINT:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_RGBA16_POINT>(memory, primitive, work);
+    case RDP_BLOCK_SAMPLER_RGBA16_BILERP:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_RGBA16_BILERP>(memory, primitive, work);
+    case RDP_BLOCK_SAMPLER_I4_BILERP:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_I4_BILERP>(memory, primitive, work);
+    case RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP>(memory, primitive, work);
+    case RDP_BLOCK_SAMPLER_I8_BILERP:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_I8_BILERP>(memory, primitive, work);
+    case RDP_BLOCK_SAMPLER_IA8_BILERP:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_IA8_BILERP>(memory, primitive, work);
+    default:
+        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_GENERIC>(memory, primitive, work);
+    }
 }
 
 sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,

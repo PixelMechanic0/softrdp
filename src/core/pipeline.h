@@ -5,6 +5,10 @@
 #include "combiner.h"
 #include "raster_coverage.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef rdp_combiner_inputs pipeline_inputs;
 
 typedef struct pipeline_outputs {
@@ -185,5 +189,9 @@ static inline sr_result pipeline_render_span(sr_memory *memory,
 }
 
 void pipeline_resolve_tile_bounds(const rdp_state *state, const tmem_state *tmem, uint32_t tile_index, rdp_tile_bounds *bounds);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

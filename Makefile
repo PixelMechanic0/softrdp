@@ -2,17 +2,27 @@ ifeq ($(origin CC),default)
 CC := gcc
 endif
 
+ifeq ($(origin CXX),default)
+CXX := g++
+endif
+
 ifeq ($(origin RM),default)
 RM := del /Q
 endif
 BUILD_DIR := build
 BUILD32_DIR := build32
 PJ64_CC ?= i686-w64-mingw32-gcc
+PJ64_CXX ?= i686-w64-mingw32-g++
 
 CFLAGS ?= -O3 -g -flto
 CFLAGS += -mavx2 -std=c17 -Wall -Wextra -Wpedantic -MMD -MP -Isrc
+CXXFLAGS ?= -O3 -g -flto
+CXXFLAGS += -mavx2 -std=gnu++20 -Wno-narrowing -Wno-c99-extensions \
+	-Wno-missing-field-initializers -Wno-missing-designated-field-initializers \
+	-Wno-missing-braces -Drestrict=__restrict -Wall -Wextra -Wpedantic -MMD -MP -Isrc
 SOFTRDP_LOG ?= 0
 CFLAGS += -DSOFTRDP_ENABLE_LOG=$(SOFTRDP_LOG)
+CXXFLAGS += -DSOFTRDP_ENABLE_LOG=$(SOFTRDP_LOG)
 LDFLAGS ?= -flto
 PLUGIN_LIBS := -lopengl32 -lgdi32 -luser32
 
@@ -67,6 +77,9 @@ dirs32:
 $(BUILD_DIR)/core_%.o: src/core/%.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/core_pipeline.o: src/core/pipeline.c | dirs
+	$(CXX) $(CXXFLAGS) -x c++ -c $< -o $@
+
 $(BUILD_DIR)/pj64_%.o: src/plugin/pj64/%.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -78,6 +91,9 @@ $(BUILD_DIR)/present_%.o: src/present/%.c | dirs
 
 $(BUILD32_DIR)/core_%.o: src/core/%.c | dirs32
 	$(PJ64_CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD32_DIR)/core_pipeline.o: src/core/pipeline.c | dirs32
+	$(PJ64_CXX) $(CXXFLAGS) -x c++ -c $< -o $@
 
 $(BUILD32_DIR)/pj64_%.o: src/plugin/pj64/%.c | dirs32
 	$(PJ64_CC) $(CFLAGS) -c $< -o $@
