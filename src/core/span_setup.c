@@ -39,16 +39,6 @@ static int32_t interpolate_attribute(const raster_decoded_triangle *decoded,
     return (int32_t)value;
 }
 
-static int32_t texture_interpolated_value(int32_t base,
-                                          int32_t ddx,
-                                          int32_t ddy,
-                                          int64_t dx_fixed,
-                                          int64_t dy_fixed)
-{
-    return (int32_t)((int64_t)base +
-                     ((int64_t)ddx * dx_fixed + (int64_t)ddy * dy_fixed) / 65536);
-}
-
 void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
                                   int x_begin,
                                   int x_end,
@@ -60,9 +50,6 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
     }
 
     const raster_decoded_triangle *decoded = &primitive->triangle;
-    const int64_t dx_fixed = ((int64_t)x_begin << 16) + 0x8000 - (int64_t)decoded->position.xh;
-    const int64_t dy_fixed = (((int64_t)y << 2) + 2 - (int64_t)decoded->position.yh) << 14;
-
     memset(work, 0, sizeof(*work));
     work->x_begin = x_begin;
     work->x_end = x_end;
@@ -82,22 +69,22 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
     }
 
     if (decoded->has_texture && primitive->color.needs_texel0) {
-        work->s_fixed = texture_interpolated_value(decoded->texture.s,
-                                                   decoded->texture.dsdx,
-                                                   decoded->texture.dsdy,
-                                                   dx_fixed,
-                                                   dy_fixed);
-        work->t_fixed = texture_interpolated_value(decoded->texture.t,
-                                                   decoded->texture.dtdx,
-                                                   decoded->texture.dtdy,
-                                                   dx_fixed,
-                                                   dy_fixed);
+        work->s_fixed = interpolate_attribute(decoded, decoded->texture.s,
+                                              decoded->texture.dsdx,
+                                              decoded->texture.dsde,
+                                              decoded->texture.dsdy,
+                                              x_begin, y);
+        work->t_fixed = interpolate_attribute(decoded, decoded->texture.t,
+                                              decoded->texture.dtdx,
+                                              decoded->texture.dtde,
+                                              decoded->texture.dtdy,
+                                              x_begin, y);
         if (primitive->texture.perspective) {
-            work->w_fixed = texture_interpolated_value(decoded->texture.w,
-                                                       decoded->texture.dwdx,
-                                                       decoded->texture.dwdy,
-                                                       dx_fixed,
-                                                       dy_fixed);
+            work->w_fixed = interpolate_attribute(decoded, decoded->texture.w,
+                                                  decoded->texture.dwdx,
+                                                  decoded->texture.dwde,
+                                                  decoded->texture.dwdy,
+                                                  x_begin, y);
         }
     }
 
