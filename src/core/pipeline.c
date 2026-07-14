@@ -173,6 +173,13 @@ static void store_texel(uint16_t destination[4][RDP_PACKET_LANES],
     destination[3][lane] = texel.a;
 }
 
+static inline int32_t rectangle_sample_coord(int32_t base, int32_t step,
+                                             uint32_t index, uint8_t shift)
+{
+    const int64_t accumulated = (int64_t)base + (int64_t)step * index;
+    return shift ? (int32_t)(accumulated >> shift) : (int32_t)accumulated;
+}
+
 static inline int32_t centroid_adjust(int32_t value,
                                       int32_t dx,
                                       int32_t dy,
@@ -710,10 +717,10 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
         }
         if (needs_texture) {
             for (uint32_t lane = 0; lane < count; lane++) {
-                const int32_t s = (int32_t)((uint32_t)work->s_fixed +
-                    (offset + lane) * (uint32_t)work->dsdx_fixed);
-                const int32_t t = (int32_t)((uint32_t)work->t_fixed +
-                    (offset + lane) * (uint32_t)work->dtdx_fixed);
+                const int32_t s = rectangle_sample_coord(work->s_fixed,
+                    work->dsdx_fixed, offset + lane, work->texture_coord_shift);
+                const int32_t t = rectangle_sample_coord(work->t_fixed,
+                    work->dtdx_fixed, offset + lane, work->texture_coord_shift);
                 rdp_color texel0, texel1;
                 const bool ok0 = !color->needs_texel0 ||
                     tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
@@ -743,10 +750,12 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                                 packet.texel0[component][lane + 1u];
                         continue;
                     }
-                    const int32_t next_s = (int32_t)((uint32_t)work->s_fixed +
-                        (offset + lane + 1u) * (uint32_t)work->dsdx_fixed);
-                    const int32_t next_t = (int32_t)((uint32_t)work->t_fixed +
-                        (offset + lane + 1u) * (uint32_t)work->dtdx_fixed);
+                    const int32_t next_s = rectangle_sample_coord(work->s_fixed,
+                        work->dsdx_fixed, offset + lane + 1u,
+                        work->texture_coord_shift);
+                    const int32_t next_t = rectangle_sample_coord(work->t_fixed,
+                        work->dtdx_fixed, offset + lane + 1u,
+                        work->texture_coord_shift);
                     rdp_color next_texel0;
                     if (tmem_sample_color_fixed5(primitive->tmem,
                             &primitive->texture, next_s, next_t, &next_texel0)) {
@@ -805,14 +814,18 @@ sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,
                                                const rdp_span_work *work)
 {
     if (!memory || !primitive || !work) return SR_ERROR_INVALID_ARGUMENT;
-    int32_t s_fixed = work->s_fixed;
-    int32_t t_fixed = work->t_fixed;
+    int32_t s_accumulated = work->s_fixed;
+    int32_t t_accumulated = work->t_fixed;
     for (int x = work->x_begin; x <= work->x_end; x++) {
+        const int32_t s_fixed = rectangle_sample_coord(s_accumulated, 0u, 0u,
+                                                       work->texture_coord_shift);
+        const int32_t t_fixed = rectangle_sample_coord(t_accumulated, 0u, 0u,
+                                                       work->texture_coord_shift);
         rdp_color texel;
         if (!tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
                                       s_fixed, t_fixed, &texel)) {
-            s_fixed += work->dsdx_fixed;
-            t_fixed += work->dtdx_fixed;
+            s_accumulated += work->dsdx_fixed;
+            t_accumulated += work->dtdx_fixed;
             continue;
         }
 
@@ -829,8 +842,8 @@ sr_result pipeline_render_copy_rectangle_span(sr_memory *memory,
                                                              texel);
             if (result != SR_OK) return result;
         }
-        s_fixed += work->dsdx_fixed;
-        t_fixed += work->dtdx_fixed;
+        s_accumulated += work->dsdx_fixed;
+        t_accumulated += work->dtdx_fixed;
     }
     return SR_OK;
 }

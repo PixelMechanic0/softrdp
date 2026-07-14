@@ -171,8 +171,10 @@ static void decode_rect(rdp_rect_cmd *rect, const rdp_command *cmd)
         rect->tile_index = (cmd->words[1] >> 24) & 7u;
         rect->s0 = (int16_t)(cmd->words[2] >> 16);
         rect->t0 = (int16_t)cmd->words[2];
-        rect->dsdx = (int16_t)(cmd->words[3] >> 16) >> 5;
-        rect->dtdy = (int16_t)cmd->words[3] >> 5;
+        /* Preserve the command's five derivative fraction bits. Rectangle
+         * scaling must accumulate them before converting to S10.5. */
+        rect->dsdx = (int16_t)(cmd->words[3] >> 16);
+        rect->dtdy = (int16_t)cmd->words[3];
     } else {
         rect->tile_index = rect->s0 = rect->t0 = rect->dsdx = rect->dtdy = 0;
     }

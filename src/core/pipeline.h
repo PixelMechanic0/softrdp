@@ -30,6 +30,7 @@ typedef struct rdp_span_work {
     int32_t w_fixed;
     int32_t dsdx_fixed;
     int32_t dtdx_fixed;
+    uint8_t texture_coord_shift;
     raster_shade_setup shade;
     raster_coverage_span coverage;
 } rdp_span_work;

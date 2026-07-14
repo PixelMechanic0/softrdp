@@ -340,8 +340,8 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
 {
     const rdp_rect_cmd *rect_cmd = &cmd->decoded.rect;
     const uint32_t tile_index = rect_cmd->tile_index;
-    const int32_t s0 = rect_cmd->s0;
-    const int32_t t0 = rect_cmd->t0;
+    const int32_t s0 = rect_cmd->s0 * 32;
+    const int32_t t0 = rect_cmd->t0 * 32;
     /* Copy mode advances one texture coordinate step per four-pixel copy
      * group. This scalar renderer emits one framebuffer pixel at a time, so
      * convert the command's group derivative to a per-pixel derivative. */
@@ -395,6 +395,7 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
                                       span_dsdx,
                                       span_dtdx,
                                       &work);
+        work.texture_coord_shift = 5u;
         sr_result result = pipeline_render_span(memory, &primitive, &work);
         if (result != SR_OK) {
             return result;
