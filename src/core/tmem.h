@@ -470,11 +470,12 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         return false;
     }
 
-    /* With TLUT enabled the RDP reinterprets every non-YUV 4/8-bit texel as
-     * a palette index, irrespective of the nominal tile format. */
+    /* TLUT-enabled IA16 rectangle effects use the upper texel byte as their
+     * palette index. */
     const bool indexed_tlut = sample->tlut_enable &&
         tile->format != RDP_FORMAT_YUV &&
-        (tile->size == RDP_SIZE_4BPP || tile->size == RDP_SIZE_8BPP);
+        (tile->size == RDP_SIZE_4BPP || tile->size == RDP_SIZE_8BPP ||
+         (sample->tlut_wide_index && tile->size == RDP_SIZE_16BPP));
     if (indexed_tlut) {
         uint32_t index;
         if (tile->size == RDP_SIZE_4BPP && address.bytes == 1) {
@@ -483,11 +484,15 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
                     (address.subtexel ? (packed & 0xfu) : (packed >> 4));
         } else if (tile->size == RDP_SIZE_8BPP && address.bytes == 1) {
             index = tmem->bytes[address.byte];
+        } else if (tile->size == RDP_SIZE_16BPP && address.bytes == 2) {
+            index = tmem->bytes[address.byte];
         } else {
             return false;
         }
 
-        const uint32_t palette_addr = 0x800u + index * 8u;
+        const uint32_t palette_logical = 0x800u + index * 8u;
+        const uint32_t palette_addr = tile->size == RDP_SIZE_16BPP
+            ? tmem_physical_word_byte(palette_logical) : palette_logical;
         if (palette_addr + 1u >= SR_TMEM_SIZE) return false;
         const uint16_t entry = ((uint16_t)tmem->bytes[palette_addr] << 8) |
                                (uint16_t)tmem->bytes[palette_addr + 1u];

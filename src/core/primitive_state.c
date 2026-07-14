@@ -312,6 +312,10 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
     }
 
     pipeline_compile_common(primitive, registers, tmem, tile_index);
+    /* Texture rectangles are also used for IA16 framebuffer effects. With
+     * TLUT enabled their upper texel byte is the palette index. */
+    primitive->texture.tlut_wide_index = true;
+    primitive->texture_cycle1.tlut_wide_index = true;
     primitive->span_kernel = registers->other_modes.cycle_type == RDP_CYCLE_COPY
         ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
         : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
