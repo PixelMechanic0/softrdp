@@ -500,6 +500,27 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             int32_t next_t[RDP_PACKET_LANES];
             int32_t next_y_s[RDP_PACKET_LANES];
             int32_t next_y_t[RDP_PACKET_LANES];
+            if (color_pipeline->needs_next_texel0 && !uses_lod) {
+                int32_t raw_s[RDP_PACKET_LANES], raw_t[RDP_PACKET_LANES];
+                int32_t raw_w[RDP_PACKET_LANES];
+                for (uint32_t lane = 0; lane < count; lane++) {
+                    raw_s[lane] = (int32_t)((uint32_t)block.s[lane] +
+                        (uint32_t)decoded->texture.dsdx);
+                    raw_t[lane] = (int32_t)((uint32_t)block.t[lane] +
+                        (uint32_t)decoded->texture.dtdx);
+                    raw_w[lane] = (int32_t)((uint32_t)block.w[lane] +
+                        (uint32_t)decoded->texture.dwdx);
+                }
+                if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE) {
+                    perspective_divide_pair_packet(raw_s, raw_t, raw_w,
+                        next_s, next_t, NULL, count);
+                } else {
+                    for (uint32_t lane = 0; lane < count; lane++) {
+                        next_s[lane] = triangle_coord_fixed5(raw_s[lane]);
+                        next_t[lane] = triangle_coord_fixed5(raw_t[lane]);
+                    }
+                }
+            }
             if (uses_lod) {
                 int32_t raw_s[RDP_PACKET_LANES], raw_t[RDP_PACKET_LANES];
                 int32_t raw_y_s[RDP_PACKET_LANES], raw_y_t[RDP_PACKET_LANES];
@@ -552,18 +573,23 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     texture0 = &primitive->lod_textures[lod.tile0];
                     texture1 = &primitive->lod_textures_cycle1[lod.tile1];
                 }
-                rdp_color texel0, texel1;
+                rdp_color texel0, texel1, next_texel0;
                 const bool ok0 = !color_pipeline->needs_texel0 ||
                     tmem_sample_color_fixed5(tmem, texture0, s, t, &texel0);
                 const bool ok1 = !color_pipeline->needs_texel1 ||
                     tmem_sample_color_fixed5(tmem, texture1, s, t, &texel1);
-                if (ok0 && ok1) {
+                const bool ok_next = !color_pipeline->needs_next_texel0 ||
+                    tmem_sample_color_fixed5(tmem, texture0, next_s[lane],
+                                             next_t[lane], &next_texel0);
+                if (ok0 && ok1 && ok_next) {
                     if (color_pipeline->needs_texel0) store_texel(block.texel0, lane, texel0);
                     if (color_pipeline->needs_texel1) store_texel(block.texel1, lane, texel1);
                     if (!color_pipeline->needs_texel1 && color_pipeline->needs_texel0)
                         store_texel(block.texel1, lane, texel0);
                     if (!color_pipeline->needs_texel0 && color_pipeline->needs_texel1)
                         store_texel(block.texel0, lane, texel1);
+                    if (color_pipeline->needs_next_texel0)
+                        store_texel(block.next_texel0, lane, next_texel0);
                 } else if (decoded->has_shade) {
                     block.fallback_mask |= bit;
                 } else {
@@ -630,14 +656,21 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     (offset + lane) * (uint32_t)work->dsdx_fixed);
                 const int32_t t = (int32_t)((uint32_t)work->t_fixed +
                     (offset + lane) * (uint32_t)work->dtdx_fixed);
-                rdp_color texel0, texel1;
+                rdp_color texel0, texel1, next_texel0;
                 const bool ok0 = !color->needs_texel0 ||
                     tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
                                              s, t, &texel0);
                 const bool ok1 = !color->needs_texel1 ||
                     tmem_sample_color_fixed5(primitive->tmem, &primitive->texture_cycle1,
                                              s, t, &texel1);
-                if (!ok0 || !ok1) {
+                const int32_t next_s = (int32_t)((uint32_t)work->s_fixed +
+                    (offset + lane + 1u) * (uint32_t)work->dsdx_fixed);
+                const int32_t next_t = (int32_t)((uint32_t)work->t_fixed +
+                    (offset + lane + 1u) * (uint32_t)work->dtdx_fixed);
+                const bool ok_next = !color->needs_next_texel0 ||
+                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
+                                             next_s, next_t, &next_texel0);
+                if (!ok0 || !ok1 || !ok_next) {
                     live_mask &= (uint16_t)~(1u << lane);
                     continue;
                 }
@@ -647,6 +680,8 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     store_texel(packet.texel1, lane, texel0);
                 if (!color->needs_texel0 && color->needs_texel1)
                     store_texel(packet.texel0, lane, texel1);
+                if (color->needs_next_texel0)
+                    store_texel(packet.next_texel0, lane, next_texel0);
             }
         }
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
