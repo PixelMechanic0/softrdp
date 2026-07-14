@@ -57,8 +57,12 @@ sr_result fragment_finish_packet(sr_memory *memory,
                 continue;
             }
         }
-        if (state->alpha_cvg_select && !state->cvg_times_alpha)
-            packet->alpha[lane] = (uint16_t)packet->coverage[lane] << 5;
+        if (state->alpha_cvg_select) {
+            if (!state->cvg_times_alpha)
+                packet->alpha[lane] = (uint16_t)packet->coverage[lane] << 5;
+            if (packet->alpha[lane] > 0xffu)
+                packet->alpha[lane] = 0xffu;
+        }
         if (state->blend.alpha_compare && packet->alpha[lane] < state->blend.blend_color.a) {
             active &= (uint16_t)~bit;
         }
