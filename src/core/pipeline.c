@@ -699,6 +699,14 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
              */
             for (uint32_t component = 0; component < 4u; component++)
                 packet.shade[component][lane] = 0u;
+            if (!needs_texture) {
+                for (uint32_t component = 0; component < 4u; component++) {
+                    if (color->needs_texel0) packet.texel0[component][lane] = 0u;
+                    if (color->needs_texel1) packet.texel1[component][lane] = 0u;
+                    if (color->needs_next_texel0)
+                        packet.next_texel0[component][lane] = 0u;
+                }
+            }
         }
         if (needs_texture) {
             for (uint32_t lane = 0; lane < count; lane++) {
