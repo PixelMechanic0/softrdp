@@ -67,6 +67,9 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
     work->x_begin = x_begin;
     work->x_end = x_end;
     work->y = y;
+    work->coverage_full_x0 = x_begin;
+    work->coverage_full_x1 = x_end;
+    work->coverage_valid_rows = 0x0fu;
 
     if (decoded->has_depth) {
         work->depth_fixed = interpolate_attribute(decoded,

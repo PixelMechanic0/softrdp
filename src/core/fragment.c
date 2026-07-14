@@ -47,7 +47,6 @@ sr_result fragment_finish_packet(sr_memory *memory,
      * the packet and are removed from the shared active mask. */
     for (uint32_t lane = 0; lane < packet->count; lane++) {
         const uint16_t bit = (uint16_t)(1u << lane);
-        packet->coverage[lane] = 8u;
         packet->alpha[lane] = packet->color[3][lane];
         if (!(active & bit)) continue;
         if (state->cvg_times_alpha) {
