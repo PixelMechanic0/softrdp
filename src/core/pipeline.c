@@ -41,14 +41,19 @@ static void perspective_divide_pair_packet(const int32_t *restrict s,
     /* S and T share one reciprocal. Keeping this as an alias-free SoA loop
      * lets the compiler vectorize it while avoiding two divisions per pair. */
     for (uint32_t lane = 0; lane < count; lane++) {
-        if (w[lane] <= 0) {
+        /* The texture-coordinate divider consumes the signed upper 16 bits
+         * of the interpolants, not the complete 16.16 accumulator values. */
+        const int32_t quantized_s = (int16_t)((uint32_t)s[lane] >> 16);
+        const int32_t quantized_t = (int16_t)((uint32_t)t[lane] >> 16);
+        const int32_t quantized_w = (int16_t)((uint32_t)w[lane] >> 16);
+        if (quantized_w <= 0) {
             output_s[lane] = output_t[lane] = 0x7fff;
             if (lod_clamp) lod_clamp[lane] = true;
             continue;
         }
-        const double scale = 32768.0 / (double)w[lane];
-        const double divided_s = (double)s[lane] * scale;
-        const double divided_t = (double)t[lane] * scale;
+        const double scale = 32768.0 / (double)quantized_w;
+        const double divided_s = (double)quantized_s * scale;
+        const double divided_t = (double)quantized_t * scale;
         if (lod_clamp && (divided_s < -65536.0 || divided_s > 65535.0 ||
                           divided_t < -65536.0 || divided_t > 65535.0))
             lod_clamp[lane] = true;
