@@ -67,6 +67,9 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
     work->x_begin = x_begin;
     work->x_end = x_end;
     work->y = y;
+    work->coverage_full_x0 = x_begin;
+    work->coverage_full_x1 = x_end;
+    work->coverage_valid_rows = 0x0fu;
 
     if (decoded->has_depth) {
         work->depth_fixed = interpolate_attribute(decoded,
@@ -95,6 +98,18 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
                                                        decoded->texture.dwdy,
                                                        dx_fixed,
                                                        dy_fixed);
+        }
+        /* The two-cycle texture pipe shades the fragment prepared two
+         * horizontal steps earlier. Align triangle coordinates with the
+         * write lane just as the rectangle setup does. */
+        if (primitive->color.cycle_type == RDP_CYCLE_2) {
+            work->s_fixed = (int32_t)((uint32_t)work->s_fixed -
+                2u * (uint32_t)decoded->texture.dsdx);
+            work->t_fixed = (int32_t)((uint32_t)work->t_fixed -
+                2u * (uint32_t)decoded->texture.dtdx);
+            if (primitive->texture.perspective)
+                work->w_fixed = (int32_t)((uint32_t)work->w_fixed -
+                    2u * (uint32_t)decoded->texture.dwdx);
         }
     }
 
