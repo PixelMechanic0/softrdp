@@ -526,6 +526,7 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
         const uint32_t count = total - offset < RDP_PACKET_LANES
             ? total - offset : RDP_PACKET_LANES;
         rdp_fragment_block packet;
+        rdp_depth_result depth_results[RDP_PACKET_LANES] = {0};
         packet.count = count;
         uint16_t live_mask = count == RDP_PACKET_LANES ? 0xffffu
             : (uint16_t)((1u << count) - 1u);
@@ -562,6 +563,22 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     store_texel(packet.texel0, lane, texel1);
             }
         }
+        if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
+            for (uint32_t lane = 0; lane < count; lane++) {
+                const uint16_t bit = (uint16_t)(1u << lane);
+                if (!(live_mask & bit)) continue;
+                const uint32_t x = (uint32_t)work->x_begin + offset + lane;
+                const uint32_t pixel = (uint32_t)work->y *
+                    primitive->framebuffer.color_image.width + x;
+                const uint32_t depth_address = primitive->fragment.depth.image_address +
+                    pixel * 2u;
+                const rdp_span_work lane_work = { .y = work->y };
+                const sr_result depth_result = scalar_depth_test(memory, primitive,
+                    &lane_work, depth_address, &depth_results[lane]);
+                if (depth_result != SR_OK) return depth_result;
+                if (!depth_results[lane].pass) live_mask &= (uint16_t)~bit;
+            }
+        }
         rdp_combiner_evaluate_packet(color, &packet);
         packet.active_mask = live_mask;
         packet.y = (uint32_t)work->y;
@@ -575,6 +592,12 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
         }
         const sr_result result = fragment_finish_packet(memory, primitive, &packet);
         if (result != SR_OK) return result;
+        for (uint32_t lane = 0; lane < count; lane++) {
+            const sr_result depth_result = commit_depth_update(memory,
+                &depth_results[lane],
+                (packet.accepted_mask & (uint16_t)(1u << lane)) != 0u);
+            if (depth_result != SR_OK) return depth_result;
+        }
     }
 
     return SR_OK;
