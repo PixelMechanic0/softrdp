@@ -236,6 +236,14 @@ static inline bool sample_compiled_texture(const tmem_state *tmem,
     }
 }
 
+typedef struct triangle_texel_carry {
+    const rdp_texture_sample_state *texture;
+    int32_t s;
+    int32_t t;
+    rdp_color texel;
+    bool valid;
+} triangle_texel_carry;
+
 template <rdp_block_sampler_kind Sampler>
 static void sample_triangle_texture_block(
     const rdp_primitive_state *primitive,
@@ -247,10 +255,15 @@ static void sample_triangle_texture_block(
     const int32_t next_y_t[RDP_PACKET_LANES],
     const bool lod_clamp[RDP_PACKET_LANES],
     uint32_t count,
-    bool uses_lod)
+    bool uses_lod,
+    triangle_texel_carry *carry)
 {
     const rdp_color_pipeline_state *color = &primitive->color;
     const tmem_state *tmem = primitive->tmem;
+    /* The preceding packet already sampled our first texel as its cycle-two
+     * lookahead. Consume it once when coordinates and the resolved tile agree. */
+    const triangle_texel_carry incoming = *carry;
+    carry->valid = false;
     for (uint32_t lane = 0; lane < count; lane++) {
         const uint16_t bit = (uint16_t)(1u << lane);
         if (!(block->active_mask & bit)) continue;
@@ -269,7 +282,10 @@ static void sample_triangle_texture_block(
             texture1 = &primitive->lod_textures_cycle1[lod.tile1];
         }
         rdp_color texel0, texel1;
-        const bool ok0 = !color->needs_texel0 ||
+        const bool reuse_texel0 = lane == 0u && incoming.valid &&
+            incoming.texture == texture0 && incoming.s == s && incoming.t == t;
+        if (reuse_texel0) texel0 = incoming.texel;
+        const bool ok0 = !color->needs_texel0 || reuse_texel0 ||
             sample_compiled_texture<Sampler>(tmem, texture0, s, t, &texel0);
         const bool ok1 = !color->needs_texel1 ||
             tmem_sample_color_fixed5(tmem, texture1, s, t, &texel1);
@@ -310,6 +326,13 @@ static void sample_triangle_texture_block(
         if (sample_compiled_texture<Sampler>(tmem, lookahead_texture,
                 next_s[lane], next_t[lane], &next_texel0)) {
             store_texel(block->next_texel0, lane, next_texel0);
+            if (lane + 1u == count) {
+                carry->texture = lookahead_texture;
+                carry->s = next_s[lane];
+                carry->t = next_t[lane];
+                carry->texel = next_texel0;
+                carry->valid = true;
+            }
         } else if (decoded->has_shade) {
             block->fallback_mask |= bit;
         } else {
@@ -600,6 +623,7 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     const raster_decoded_triangle *decoded = &primitive->triangle;
     const rdp_color_pipeline_state *color_pipeline = &primitive->color;
     rdp_span_work cursor = *work;
+    triangle_texel_carry texel_carry = {0};
     const int total = work->x_end - work->x_begin + 1;
 
     for (int processed = 0; processed < total;) {
@@ -732,17 +756,17 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             if (uses_lod) {
                 sample_triangle_texture_block<RDP_BLOCK_SAMPLER_GENERIC>(
                     primitive, decoded, &block, next_s, next_t, next_y_s,
-                    next_y_t, lod_clamp, count, true);
+                    next_y_t, lod_clamp, count, true, &texel_carry);
             } else {
                 switch (primitive->block_plan.sampler) {
                 case RDP_BLOCK_SAMPLER_RGBA16_POINT:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_POINT>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_POINT>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false, &texel_carry);
                     break;
                 case RDP_BLOCK_SAMPLER_RGBA16_BILERP:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false, &texel_carry);
                     break;
                 default:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_GENERIC>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
+                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_GENERIC>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false, &texel_carry);
                     break;
                 }
             }
