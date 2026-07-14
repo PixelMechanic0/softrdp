@@ -1,4 +1,5 @@
 #include <string.h>
+#include <immintrin.h>
 extern "C" {
 #include "pipeline.h"
 #include "framebuffer.h"
@@ -40,9 +41,54 @@ static void perspective_divide_pair_packet(const int32_t *restrict s,
                                            bool *restrict lod_clamp,
                                            uint32_t count)
 {
-    /* S and T share one reciprocal. Keeping this as an alias-free SoA loop
-     * lets the compiler vectorize it while avoiding two divisions per pair. */
-    for (uint32_t lane = 0; lane < count; lane++) {
+    /* S and T share one reciprocal. Process four lanes per AVX2 packet;
+     * the scalar loop below handles the remaining lanes. */
+    uint32_t lane = 0;
+    const __m256d zero = _mm256_setzero_pd();
+    const __m256d one = _mm256_set1_pd(1.0);
+    const __m256d numerator = _mm256_set1_pd(32768.0);
+    const __m256d minimum = _mm256_set1_pd(-65536.0);
+    const __m256d maximum = _mm256_set1_pd(65535.0);
+    const __m256d invalid_value = _mm256_set1_pd(32767.0);
+    for (; lane + 4u <= count; lane += 4u) {
+        const __m128i qs = _mm_srai_epi32(
+            _mm_loadu_si128((const __m128i *)(s + lane)), 16);
+        const __m128i qt = _mm_srai_epi32(
+            _mm_loadu_si128((const __m128i *)(t + lane)), 16);
+        const __m128i qw = _mm_srai_epi32(
+            _mm_loadu_si128((const __m128i *)(w + lane)), 16);
+        const __m256d ws = _mm256_cvtepi32_pd(qw);
+        const __m256d invalid = _mm256_cmp_pd(ws, zero, _CMP_LE_OQ);
+        const __m256d safe_w = _mm256_blendv_pd(ws, one, invalid);
+        const __m256d scale = _mm256_div_pd(numerator, safe_w);
+        const __m256d divided_s = _mm256_mul_pd(_mm256_cvtepi32_pd(qs), scale);
+        const __m256d divided_t = _mm256_mul_pd(_mm256_cvtepi32_pd(qt), scale);
+        const __m256d clamped_s = _mm256_blendv_pd(
+            _mm256_max_pd(minimum, _mm256_min_pd(maximum, divided_s)),
+            invalid_value, invalid);
+        const __m256d clamped_t = _mm256_blendv_pd(
+            _mm256_max_pd(minimum, _mm256_min_pd(maximum, divided_t)),
+            invalid_value, invalid);
+        _mm_storeu_si128((__m128i *)(output_s + lane),
+                         _mm256_cvttpd_epi32(clamped_s));
+        _mm_storeu_si128((__m128i *)(output_t + lane),
+                         _mm256_cvttpd_epi32(clamped_t));
+        if (lod_clamp) {
+            __m256d out_of_range = invalid;
+            out_of_range = _mm256_or_pd(out_of_range,
+                _mm256_cmp_pd(divided_s, minimum, _CMP_LT_OQ));
+            out_of_range = _mm256_or_pd(out_of_range,
+                _mm256_cmp_pd(divided_s, maximum, _CMP_GT_OQ));
+            out_of_range = _mm256_or_pd(out_of_range,
+                _mm256_cmp_pd(divided_t, minimum, _CMP_LT_OQ));
+            out_of_range = _mm256_or_pd(out_of_range,
+                _mm256_cmp_pd(divided_t, maximum, _CMP_GT_OQ));
+            const uint32_t mask = (uint32_t)_mm256_movemask_pd(out_of_range);
+            for (uint32_t offset = 0; offset < 4u; offset++)
+                if (mask & (1u << offset)) lod_clamp[lane + offset] = true;
+        }
+    }
+    for (; lane < count; lane++) {
         /* The texture-coordinate divider consumes the signed upper 16 bits
          * of the interpolants, not the complete 16.16 accumulator values. */
         const int32_t quantized_s = (int16_t)((uint32_t)s[lane] >> 16);
