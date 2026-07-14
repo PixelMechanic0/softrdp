@@ -185,11 +185,6 @@ static inline bool sample_compiled_texture(const tmem_state *tmem,
         return tmem_sample_rgba16_bilerp_fixed5(tmem, sample, s, t, color);
     } else if constexpr (Sampler == RDP_BLOCK_SAMPLER_RGBA16_POINT) {
         return tmem_sample_rgba16_point_fixed5(tmem, sample, s, t, color);
-    } else if constexpr (Sampler == RDP_BLOCK_SAMPLER_I4_BILERP ||
-                         Sampler == RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP ||
-                         Sampler == RDP_BLOCK_SAMPLER_I8_BILERP ||
-                         Sampler == RDP_BLOCK_SAMPLER_IA8_BILERP) {
-        return tmem_sample_compact_bilerp_fixed5(tmem, sample, s, t, color);
     } else {
         return tmem_sample_color_fixed5(tmem, sample, s, t, color);
     }
@@ -700,18 +695,6 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 case RDP_BLOCK_SAMPLER_RGBA16_BILERP:
                     sample_triangle_texture_block<RDP_BLOCK_SAMPLER_RGBA16_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
                     break;
-                case RDP_BLOCK_SAMPLER_I4_BILERP:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_I4_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
-                    break;
-                case RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
-                    break;
-                case RDP_BLOCK_SAMPLER_I8_BILERP:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_I8_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
-                    break;
-                case RDP_BLOCK_SAMPLER_IA8_BILERP:
-                    sample_triangle_texture_block<RDP_BLOCK_SAMPLER_IA8_BILERP>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
-                    break;
                 default:
                     sample_triangle_texture_block<RDP_BLOCK_SAMPLER_GENERIC>(primitive, decoded, &block, next_s, next_t, next_y_s, next_y_t, lod_clamp, count, false);
                     break;
@@ -885,14 +868,6 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
         return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_RGBA16_POINT>(memory, primitive, work);
     case RDP_BLOCK_SAMPLER_RGBA16_BILERP:
         return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_RGBA16_BILERP>(memory, primitive, work);
-    case RDP_BLOCK_SAMPLER_I4_BILERP:
-        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_I4_BILERP>(memory, primitive, work);
-    case RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP:
-        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_CI8_TLUT_BILERP>(memory, primitive, work);
-    case RDP_BLOCK_SAMPLER_I8_BILERP:
-        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_I8_BILERP>(memory, primitive, work);
-    case RDP_BLOCK_SAMPLER_IA8_BILERP:
-        return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_IA8_BILERP>(memory, primitive, work);
     default:
         return pipeline_render_rectangle_span_specialized<RDP_BLOCK_SAMPLER_GENERIC>(memory, primitive, work);
     }
