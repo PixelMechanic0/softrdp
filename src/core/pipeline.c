@@ -573,27 +573,54 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     texture0 = &primitive->lod_textures[lod.tile0];
                     texture1 = &primitive->lod_textures_cycle1[lod.tile1];
                 }
-                rdp_color texel0, texel1, next_texel0;
+                rdp_color texel0, texel1;
                 const bool ok0 = !color_pipeline->needs_texel0 ||
                     tmem_sample_color_fixed5(tmem, texture0, s, t, &texel0);
                 const bool ok1 = !color_pipeline->needs_texel1 ||
                     tmem_sample_color_fixed5(tmem, texture1, s, t, &texel1);
-                const bool ok_next = !color_pipeline->needs_next_texel0 ||
-                    tmem_sample_color_fixed5(tmem, texture0, next_s[lane],
-                                             next_t[lane], &next_texel0);
-                if (ok0 && ok1 && ok_next) {
+                if (ok0 && ok1) {
                     if (color_pipeline->needs_texel0) store_texel(block.texel0, lane, texel0);
                     if (color_pipeline->needs_texel1) store_texel(block.texel1, lane, texel1);
                     if (!color_pipeline->needs_texel1 && color_pipeline->needs_texel0)
                         store_texel(block.texel1, lane, texel0);
                     if (!color_pipeline->needs_texel0 && color_pipeline->needs_texel1)
                         store_texel(block.texel0, lane, texel1);
-                    if (color_pipeline->needs_next_texel0)
-                        store_texel(block.next_texel0, lane, next_texel0);
                 } else if (decoded->has_shade) {
                     block.fallback_mask |= bit;
                 } else {
                     block.active_mask &= (uint16_t)~bit;
+                }
+            }
+            if (color_pipeline->needs_next_texel0) {
+                for (uint32_t lane = 0; lane < count; lane++) {
+                    const uint16_t bit = (uint16_t)(1u << lane);
+                    if (!(block.active_mask & bit)) continue;
+                    const uint16_t next_bit = (uint16_t)(bit << 1);
+                    if (lane + 1u < count && (block.active_mask & next_bit) &&
+                        !(block.fallback_mask & next_bit)) {
+                        for (uint32_t component = 0; component < 4u; component++)
+                            block.next_texel0[component][lane] =
+                                block.texel0[component][lane + 1u];
+                        continue;
+                    }
+
+                    const rdp_texture_sample_state *lookahead_texture = texture;
+                    if (uses_lod) {
+                        const rdp_lod_result lod = resolve_lod(primitive,
+                            block.sample_s[lane], block.sample_t[lane],
+                            next_s[lane], next_t[lane], next_y_s[lane],
+                            next_y_t[lane], lod_clamp[lane]);
+                        lookahead_texture = &primitive->lod_textures[lod.tile0];
+                    }
+                    rdp_color next_texel0;
+                    if (tmem_sample_color_fixed5(tmem, lookahead_texture,
+                            next_s[lane], next_t[lane], &next_texel0)) {
+                        store_texel(block.next_texel0, lane, next_texel0);
+                    } else if (decoded->has_shade) {
+                        block.fallback_mask |= bit;
+                    } else {
+                        block.active_mask &= (uint16_t)~bit;
+                    }
                 }
             }
         }
@@ -656,21 +683,14 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     (offset + lane) * (uint32_t)work->dsdx_fixed);
                 const int32_t t = (int32_t)((uint32_t)work->t_fixed +
                     (offset + lane) * (uint32_t)work->dtdx_fixed);
-                rdp_color texel0, texel1, next_texel0;
+                rdp_color texel0, texel1;
                 const bool ok0 = !color->needs_texel0 ||
                     tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
                                              s, t, &texel0);
                 const bool ok1 = !color->needs_texel1 ||
                     tmem_sample_color_fixed5(primitive->tmem, &primitive->texture_cycle1,
                                              s, t, &texel1);
-                const int32_t next_s = (int32_t)((uint32_t)work->s_fixed +
-                    (offset + lane + 1u) * (uint32_t)work->dsdx_fixed);
-                const int32_t next_t = (int32_t)((uint32_t)work->t_fixed +
-                    (offset + lane + 1u) * (uint32_t)work->dtdx_fixed);
-                const bool ok_next = !color->needs_next_texel0 ||
-                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture,
-                                             next_s, next_t, &next_texel0);
-                if (!ok0 || !ok1 || !ok_next) {
+                if (!ok0 || !ok1) {
                     live_mask &= (uint16_t)~(1u << lane);
                     continue;
                 }
@@ -680,8 +700,30 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     store_texel(packet.texel1, lane, texel0);
                 if (!color->needs_texel0 && color->needs_texel1)
                     store_texel(packet.texel0, lane, texel1);
-                if (color->needs_next_texel0)
-                    store_texel(packet.next_texel0, lane, next_texel0);
+            }
+            if (color->needs_next_texel0) {
+                for (uint32_t lane = 0; lane < count; lane++) {
+                    const uint16_t bit = (uint16_t)(1u << lane);
+                    if (!(live_mask & bit)) continue;
+                    if (lane + 1u < count &&
+                        (live_mask & (uint16_t)(bit << 1))) {
+                        for (uint32_t component = 0; component < 4u; component++)
+                            packet.next_texel0[component][lane] =
+                                packet.texel0[component][lane + 1u];
+                        continue;
+                    }
+                    const int32_t next_s = (int32_t)((uint32_t)work->s_fixed +
+                        (offset + lane + 1u) * (uint32_t)work->dsdx_fixed);
+                    const int32_t next_t = (int32_t)((uint32_t)work->t_fixed +
+                        (offset + lane + 1u) * (uint32_t)work->dtdx_fixed);
+                    rdp_color next_texel0;
+                    if (tmem_sample_color_fixed5(primitive->tmem,
+                            &primitive->texture, next_s, next_t, &next_texel0)) {
+                        store_texel(packet.next_texel0, lane, next_texel0);
+                    } else {
+                        live_mask &= (uint16_t)~bit;
+                    }
+                }
             }
         }
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
