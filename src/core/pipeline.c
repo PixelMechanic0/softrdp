@@ -231,6 +231,8 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
                                           const rdp_primitive_state *primitive,
                                           const rdp_span_work *cursor,
                                           uint32_t addr,
+                                          uint32_t color_addr,
+                                          uint8_t current_coverage,
                                           rdp_depth_result *result)
 {
     const rdp_depth_state *depth = &primitive->fragment.depth;
@@ -258,15 +260,30 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
         const uint32_t old_depth = rdp_depth_decompress(old_stored);
         const bool maximum = old_depth == 0x3ffffu;
         const bool in_front = new_depth < old_depth;
-        const uint32_t raw_memory_delta = ((old_stored & 3u) << 2) |
-                                          ((old_stored & 1u) ? 3u : 0u);
+        /* RDRAM retains the upper depth-delta exponent bits. Do not invent
+         * missing low bits: that greatly widens interpenetrating depth tests
+         * and lets unrelated surface triangles overwrite foreground pixels. */
+        const uint32_t raw_memory_delta = (old_stored & 3u) << 2;
         const uint32_t delta = highest_depth_delta(depth->pixel_delta |
                                                    (1u << raw_memory_delta));
         const bool nearer = new_depth <= old_depth + delta * 8u;
         const bool farther = new_depth + delta * 8u >= old_depth;
+        bool overflow = current_coverage == 8u;
+        if (!overflow) {
+            uint8_t memory_coverage = 7u;
+            if (primitive->fragment.blend.image_read) {
+                rdp_memory_pixel memory_pixel;
+                const sr_result read_result = framebuffer_read_memory_address(memory,
+                    primitive->framebuffer.color_image.size, color_addr, true,
+                    &memory_pixel);
+                if (read_result != SR_OK) return read_result;
+                memory_coverage = memory_pixel.coverage;
+            }
+            overflow = ((current_coverage + memory_coverage) & 8u) != 0u;
+        }
         switch (depth->mode & 3u) {
-        case 0u: result->pass = maximum || in_front; break;
-        case 1u: result->pass = maximum || nearer; break;
+        case 0u: result->pass = maximum || (overflow ? in_front : nearer); break;
+        case 1u: result->pass = maximum || (overflow ? in_front : nearer); break;
         case 2u: result->pass = maximum || in_front; break;
         default: result->pass = !maximum && nearer && farther; break;
         }
@@ -471,7 +488,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 const uint32_t depth_address = primitive->fragment.depth.image_address +
                     ((uint32_t)work->y * primitive->framebuffer.color_image.width + block.x[0]) * 2u + lane * 2u;
                 const sr_result result = scalar_depth_test(memory, primitive,
-                    &lane_work, depth_address, &depth);
+                    &lane_work, depth_address, block.color_address[lane],
+                    block.coverage[lane], &depth);
                 if (result != SR_OK) return result;
                 if (!depth.pass) block.active_mask &= (uint16_t)~(1u << lane);
                 if (depth.update) {
@@ -737,7 +755,10 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
                     pixel * 2u;
                 const rdp_span_work lane_work = { .y = work->y };
                 const sr_result depth_result = scalar_depth_test(memory, primitive,
-                    &lane_work, depth_address, &depth_results[lane]);
+                    &lane_work, depth_address,
+                    primitive->framebuffer.color_image.address +
+                        pixel * primitive->framebuffer.bytes_per_pixel,
+                    8u, &depth_results[lane]);
                 if (depth_result != SR_OK) return depth_result;
                 if (!depth_results[lane].pass) live_mask &= (uint16_t)~bit;
             }
