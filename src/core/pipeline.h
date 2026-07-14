@@ -3,6 +3,7 @@
 
 #include "rdp_commands.h"
 #include "combiner.h"
+#include "raster_coverage.h"
 
 typedef rdp_combiner_inputs pipeline_inputs;
 
@@ -30,13 +31,7 @@ typedef struct rdp_span_work {
     int32_t dsdx_fixed;
     int32_t dtdx_fixed;
     raster_shade_setup shade;
-    /* Four RDP Y-subpixel edge pairs in 16.3 X coordinates. Interior
-     * packets use full_x0/full_x1 without evaluating individual samples. */
-    int32_t coverage_left[4];
-    int32_t coverage_right[4];
-    int coverage_full_x0;
-    int coverage_full_x1;
-    uint8_t coverage_valid_rows;
+    raster_coverage_span coverage;
 } rdp_span_work;
 
 typedef enum rdp_span_kernel_kind {

@@ -3,7 +3,6 @@
 #include "framebuffer.h"
 #include "pipeline.h"
 
-#include <limits.h>
 #include <stdint.h>
 
 
@@ -121,22 +120,14 @@ typedef struct raster_span {
     int y;
     int x0;
     int x1;
-    int32_t left[4];
-    int32_t right[4];
-    int full_x0;
-    int full_x1;
-    uint8_t valid_rows;
+    raster_coverage_span coverage;
 } raster_span;
 
-static int32_t quantize_edge_x_16_3(int64_t x)
+static int32_t clamp_edge_x(int64_t x, int32_t minimum, int32_t maximum)
 {
-    /* The RDP snaps 16.16 edge X to eighth-pixel precision and preserves
-     * discarded information in the low sticky bit. */
-    const int64_t sticky = ((x >> 1) & 0x1fffll) != 0;
-    const int64_t snapped = ((x >> 13) & ~1ll) | sticky;
-    if (snapped < INT32_MIN) return INT32_MIN;
-    if (snapped > INT32_MAX) return INT32_MAX;
-    return (int32_t)snapped;
+    if (x < minimum) return minimum;
+    if (x > maximum) return maximum;
+    return (int32_t)x;
 }
 
 static bool triangle_span_for_y(const raster_triangle_setup *setup,
@@ -149,12 +140,12 @@ static bool triangle_span_for_y(const raster_triangle_setup *setup,
     const int64_t yh_base = (int64_t)setup->yh & ~3ll;
     const int scissor_y0 = state->scissor_y0 ? (int)state->scissor_y0 : 0;
     const int scissor_y1 = state->scissor_y1 ? (int)state->scissor_y1 : 0x1000;
-    const int32_t scissor_x0 = state->scissor_x0 ? (int32_t)state->scissor_x0 * 2 : 0;
-    const int32_t scissor_x1 = state->scissor_x1 ? (int32_t)state->scissor_x1 * 2 : 0x2000;
-    int min_edge = INT_MAX;
-    int max_edge = INT_MIN;
-    int full_x0 = INT_MIN;
-    int full_x1 = INT_MAX;
+    const int32_t scissor_x0 = state->scissor_x0 ? (int32_t)state->scissor_x0 << 14 : 0;
+    const int32_t scissor_x1 = state->scissor_x1 ? (int32_t)state->scissor_x1 << 14 : 0x04000000;
+    int min_edge = 0x3fffffff;
+    int max_edge = -0x3fffffff;
+    int full_x0 = -0x3fffffff;
+    int full_x1 = 0x3fffffff;
     uint8_t valid_rows = 0u;
 
     *span = (raster_span){ .y = y };
@@ -177,37 +168,34 @@ static bool triangle_span_for_y(const raster_triangle_setup *setup,
                 (int64_t)setup->dxldy * (y_sub - setup->ym), 4);
         }
 
-        int32_t left = quantize_edge_x_16_3(setup->flip ? xh : xl);
-        int32_t right = quantize_edge_x_16_3(setup->flip ? xl : xh);
-        if ((left >> 1) > (right >> 1)) continue;
-        if (left < scissor_x0) left = scissor_x0;
-        if (left > scissor_x1) left = scissor_x1;
-        if (right < scissor_x0) right = scissor_x0;
-        if (right > scissor_x1) right = scissor_x1;
+        const int32_t left = clamp_edge_x(setup->flip ? xh : xl, scissor_x0, scissor_x1);
+        const int32_t right = clamp_edge_x(setup->flip ? xl : xh, scissor_x0, scissor_x1);
+        if (left >= right) continue;
 
-        span->left[row] = left;
-        span->right[row] = right;
+        span->coverage.left[row] = left;
+        span->coverage.right[row] = right;
         valid_rows |= (uint8_t)(1u << row);
         if (left < min_edge) min_edge = left;
         if (right > max_edge) max_edge = right;
 
-        const int row_full_x0 = fixed_ceil_div((int64_t)left - sample_min[row], 8);
+        const int row_full_x0 = fixed_ceil_div(
+            (int64_t)left - (int64_t)sample_min[row] * 8192, 65536);
         const int row_full_x1 = fixed_floor_div(
-            (int64_t)right - 1 - sample_max[row], 8);
+            (int64_t)right - 1 - (int64_t)sample_max[row] * 8192, 65536);
         if (row_full_x0 > full_x0) full_x0 = row_full_x0;
         if (row_full_x1 < full_x1) full_x1 = row_full_x1;
     }
 
     if (!valid_rows) return false;
-    span->valid_rows = valid_rows;
-    span->x0 = fixed_floor_div(min_edge, 8);
-    span->x1 = fixed_floor_div(max_edge, 8);
+    span->coverage.valid_rows = valid_rows;
+    span->x0 = fixed_floor_div(min_edge, 65536);
+    span->x1 = fixed_floor_div(max_edge, 65536);
     if (valid_rows == 0x0fu) {
-        span->full_x0 = full_x0;
-        span->full_x1 = full_x1;
+        span->coverage.full_x0 = full_x0;
+        span->coverage.full_x1 = full_x1;
     } else {
-        span->full_x0 = 1;
-        span->full_x1 = 0;
+        span->coverage.full_x0 = 1;
+        span->coverage.full_x1 = 0;
     }
     return span->x0 <= span->x1;
 }
@@ -241,9 +229,9 @@ static bool fill_triangle_span_for_y(const raster_triangle_setup *setup,
     if (y < min_y || y > max_y) return false;
     if (span->x0 < min_x) span->x0 = min_x;
     if (span->x1 > max_x) span->x1 = max_x;
-    span->full_x0 = span->x0;
-    span->full_x1 = span->x1;
-    span->valid_rows = 0x0fu;
+    span->coverage.full_x0 = span->x0;
+    span->coverage.full_x1 = span->x1;
+    span->coverage.valid_rows = 0x0fu;
     return span->x0 <= span->x1;
 }
 
@@ -335,13 +323,7 @@ sr_result raster_submit_triangle(sr_memory *memory,
 
         rdp_span_work work;
         pipeline_setup_triangle_span(&primitive, span.x0, span.x1, y, &work);
-        for (uint32_t row = 0; row < 4u; row++) {
-            work.coverage_left[row] = span.left[row];
-            work.coverage_right[row] = span.right[row];
-        }
-        work.coverage_full_x0 = span.full_x0;
-        work.coverage_full_x1 = span.full_x1;
-        work.coverage_valid_rows = span.valid_rows;
+        work.coverage = span.coverage;
         result = pipeline_render_span(memory, &primitive, &work);
         if (result != SR_OK) {
             return result;

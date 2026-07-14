@@ -25,6 +25,7 @@ CORE_SRCS := \
 	src/core/blender.c \
 	src/core/fragment.c \
 	src/core/raster.c \
+	src/core/raster_coverage.c \
 	src/core/tmem.c \
 	src/core/primitive_state.c \
 	src/core/span_setup.c \

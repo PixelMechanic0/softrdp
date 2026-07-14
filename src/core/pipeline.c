@@ -168,45 +168,15 @@ static void store_texel(uint16_t destination[4][RDP_PACKET_LANES],
     destination[3][lane] = texel.a;
 }
 
-static inline uint8_t triangle_coverage_mask(const rdp_span_work *work, int x)
+static inline int32_t centroid_adjust(int32_t value,
+                                      int32_t dx,
+                                      int32_t dy,
+                                      const raster_coverage *coverage)
 {
-    if (x >= work->coverage_full_x0 && x <= work->coverage_full_x1)
-        return 0xffu;
-
-    uint8_t mask = 0u;
-    for (uint32_t row = 0; row < 4u; row++) {
-        if (!(work->coverage_valid_rows & (1u << row))) continue;
-        const uint32_t fmask = 0xau >> (row & 1u);
-        const uint32_t shift = (row - 2u) & 4u;
-        const int32_t left = work->coverage_left[row];
-        const int32_t right = work->coverage_right[row];
-        const int32_t left_pixel = left >> 3;
-        const int32_t right_pixel = right >> 3;
-        uint32_t row_mask = 0u;
-        if (x > left_pixel && x < right_pixel) {
-            row_mask = fmask;
-        } else if (x == left_pixel && x == right_pixel) {
-            const uint32_t left_covered =
-                0xfu >> ((((uint32_t)left & 7u) + 1u) >> 1u);
-            const uint32_t right_covered =
-                0xf0u >> ((((uint32_t)right & 7u) + 1u) >> 1u);
-            row_mask = left_covered & right_covered & fmask;
-        } else if (x == left_pixel) {
-            row_mask = (0xfu >> ((((uint32_t)left & 7u) + 1u) >> 1u)) & fmask;
-        } else if (x == right_pixel) {
-            row_mask = (0xf0u >> ((((uint32_t)right & 7u) + 1u) >> 1u)) & fmask;
-        }
-        mask |= (uint8_t)(row_mask << shift);
-    }
-    return mask;
-}
-
-static inline uint8_t coverage_count(uint8_t mask)
-{
-    static const uint8_t nibble_count[16] = {
-        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
-    };
-    return (uint8_t)(nibble_count[mask & 0xfu] + nibble_count[mask >> 4]);
+    if (coverage->count == 0u || coverage->count == 8u) return value;
+    const int64_t correction = (int64_t)dx * coverage->centroid_x_sum +
+                               (int64_t)dy * coverage->centroid_y_sum;
+    return (int32_t)((int64_t)value + correction / ((int64_t)coverage->count * 8));
 }
 
 typedef struct rdp_depth_result {
@@ -346,25 +316,63 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
     const raster_decoded_triangle *decoded = &primitive->triangle;
     const int32_t dr[4] = { decoded->shade.drdx & ~0x1f, decoded->shade.dgdx & ~0x1f,
                             decoded->shade.dbdx & ~0x1f, decoded->shade.dadx & ~0x1f };
+    const int32_t shade_dy[4] = { decoded->shade.drdy, decoded->shade.dgdy,
+                                  decoded->shade.dbdy, decoded->shade.dady };
     const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
+    const bool full_block = cursor->x_begin >= cursor->coverage.full_x0 &&
+        cursor->x_begin + (int)count - 1 <= cursor->coverage.full_x1;
+    raster_coverage edge_coverage[RDP_PACKET_LANES];
+    if (full_block) {
+        memset(block->coverage, 8, count * sizeof(block->coverage[0]));
+    } else {
+        for (uint32_t lane = 0; lane < count; lane++) {
+            const int x = cursor->x_begin + (int)lane;
+            edge_coverage[lane] = raster_coverage_evaluate(&cursor->coverage, x);
+            block->coverage[lane] = edge_coverage[lane].count;
+            if (edge_coverage[lane].count == 0u ||
+                (!primitive->fragment.antialias && !edge_coverage[lane].center_covered))
+                block->active_mask &= (uint16_t)~(1u << lane);
+        }
+    }
     for (uint32_t lane = 0; lane < count; lane++) {
         block->x[lane] = cursor->x_begin + (int)lane;
-        const uint8_t coverage_mask = triangle_coverage_mask(cursor, block->x[lane]);
-        block->coverage_mask[lane] = coverage_mask;
-        block->coverage[lane] = coverage_count(coverage_mask);
-        if (!coverage_mask ||
-            (!primitive->fragment.antialias && !(coverage_mask & 1u)))
-            block->active_mask &= (uint16_t)~(1u << lane);
         block->color_address[lane] = first_color_address + lane * primitive->framebuffer.bytes_per_pixel;
-        block->depth_fixed[lane] = cursor->depth_fixed + (int64_t)lane * decoded->depth.dzdx;
-        block->s[lane] = (int32_t)((uint32_t)cursor->s_fixed + lane * (uint32_t)decoded->texture.dsdx);
-        block->t[lane] = (int32_t)((uint32_t)cursor->t_fixed + lane * (uint32_t)decoded->texture.dtdx);
-        block->w[lane] = (int32_t)((uint32_t)cursor->w_fixed + lane * (uint32_t)decoded->texture.dwdx);
+        /* Keep depth at the pixel center. Moving neighboring polygons to
+         * different coverage centroids creates unstable seam comparisons. */
+        block->depth_fixed[lane] = cursor->depth_fixed +
+            (int64_t)lane * decoded->depth.dzdx;
+        const int32_t s = (int32_t)((uint32_t)cursor->s_fixed +
+            lane * (uint32_t)decoded->texture.dsdx);
+        const int32_t t = (int32_t)((uint32_t)cursor->t_fixed +
+            lane * (uint32_t)decoded->texture.dtdx);
+        const int32_t w = (int32_t)((uint32_t)cursor->w_fixed +
+            lane * (uint32_t)decoded->texture.dwdx);
+        block->s[lane] = s;
+        block->t[lane] = t;
+        block->w[lane] = w;
         for (uint32_t component = 0; component < 4u; component++) {
             const int32_t interpolated = (int32_t)((uint32_t)base[component] + lane * (uint32_t)dr[component]);
             block->shade[component][lane] = shade_component_to_u8(interpolated);
         }
         block->lod_fraction[lane] = 0u;
+    }
+    if (!full_block) {
+        for (uint32_t lane = 0; lane < count; lane++) {
+            const raster_coverage *coverage = &edge_coverage[lane];
+            if (coverage->count == 0u || coverage->count == 8u) continue;
+            block->s[lane] = centroid_adjust(block->s[lane], decoded->texture.dsdx,
+                decoded->texture.dsdy, coverage);
+            block->t[lane] = centroid_adjust(block->t[lane], decoded->texture.dtdx,
+                decoded->texture.dtdy, coverage);
+            block->w[lane] = centroid_adjust(block->w[lane], decoded->texture.dwdx,
+                decoded->texture.dwdy, coverage);
+            for (uint32_t component = 0; component < 4u; component++) {
+                const int32_t interpolated = (int32_t)((uint32_t)base[component] +
+                    lane * (uint32_t)dr[component]);
+                block->shade[component][lane] = shade_component_to_u8(
+                    centroid_adjust(interpolated, dr[component], shade_dy[component], coverage));
+            }
+        }
     }
     if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
     if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
@@ -580,7 +588,6 @@ sr_result pipeline_render_rectangle_span(sr_memory *memory,
             : (uint16_t)((1u << count) - 1u);
         for (uint32_t lane = 0; lane < count; lane++) {
             packet.lod_fraction[lane] = 0u;
-            packet.coverage_mask[lane] = 0xffu;
             packet.coverage[lane] = 8u;
             /* Texture rectangles carry no shade coefficients. The RDP
              * edgewalker supplies zero RGBA shade attributes for every lane.
