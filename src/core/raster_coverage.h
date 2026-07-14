@@ -15,8 +15,8 @@ typedef struct raster_coverage_span {
 typedef struct raster_coverage {
     uint8_t count;
     bool center_covered;
-    int8_t centroid_x_sum;
-    int8_t centroid_y_sum;
+    int16_t centroid_x_q8;
+    int16_t centroid_y_q8;
 } raster_coverage;
 
 raster_coverage raster_coverage_evaluate(const raster_coverage_span *span, int x);

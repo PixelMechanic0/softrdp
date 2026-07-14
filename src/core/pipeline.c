@@ -174,9 +174,10 @@ static inline int32_t centroid_adjust(int32_t value,
                                       const raster_coverage *coverage)
 {
     if (coverage->count == 0u || coverage->count == 8u) return value;
-    const int64_t correction = (int64_t)dx * coverage->centroid_x_sum +
-                               (int64_t)dy * coverage->centroid_y_sum;
-    return (int32_t)((int64_t)value + correction / ((int64_t)coverage->count * 8));
+    const int64_t scaled = (int64_t)dx * coverage->centroid_x_q8 +
+                           (int64_t)dy * coverage->centroid_y_q8;
+    const int64_t correction = scaled >= 0 ? scaled >> 8 : -((-scaled) >> 8);
+    return (int32_t)((int64_t)value + correction);
 }
 
 typedef struct rdp_depth_result {
@@ -293,16 +294,17 @@ static inline sr_result commit_depth_update(sr_memory *memory,
     return SR_OK;
 }
 
-static void setup_triangle_block(const rdp_primitive_state *primitive,
-                                 rdp_span_work *cursor,
-                                 uint32_t count,
-                                 rdp_fragment_block *block)
+static void setup_triangle_full_block(const rdp_primitive_state *primitive,
+                                      rdp_span_work *cursor,
+                                      uint32_t count,
+                                      rdp_fragment_block *block)
 {
     block->count = count;
     block->active_mask = count == RDP_PACKET_LANES ? 0xffffu : (uint16_t)((1u << count) - 1u);
     block->fallback_mask = 0u;
     block->depth_update_mask = 0u;
     block->y = (uint32_t)cursor->y;
+    memset(block->coverage, 8, count * sizeof(block->coverage[0]));
     if (!(primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE)) {
         if (primitive->color.needs_texel0)
             memset(block->texel0, 0, sizeof(block->texel0));
@@ -316,24 +318,7 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
     const raster_decoded_triangle *decoded = &primitive->triangle;
     const int32_t dr[4] = { decoded->shade.drdx & ~0x1f, decoded->shade.dgdx & ~0x1f,
                             decoded->shade.dbdx & ~0x1f, decoded->shade.dadx & ~0x1f };
-    const int32_t shade_dy[4] = { decoded->shade.drdy, decoded->shade.dgdy,
-                                  decoded->shade.dbdy, decoded->shade.dady };
     const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
-    const bool full_block = cursor->x_begin >= cursor->coverage.full_x0 &&
-        cursor->x_begin + (int)count - 1 <= cursor->coverage.full_x1;
-    raster_coverage edge_coverage[RDP_PACKET_LANES];
-    if (full_block) {
-        memset(block->coverage, 8, count * sizeof(block->coverage[0]));
-    } else {
-        for (uint32_t lane = 0; lane < count; lane++) {
-            const int x = cursor->x_begin + (int)lane;
-            edge_coverage[lane] = raster_coverage_evaluate(&cursor->coverage, x);
-            block->coverage[lane] = edge_coverage[lane].count;
-            if (edge_coverage[lane].count == 0u ||
-                (!primitive->fragment.antialias && !edge_coverage[lane].center_covered))
-                block->active_mask &= (uint16_t)~(1u << lane);
-        }
-    }
     for (uint32_t lane = 0; lane < count; lane++) {
         block->x[lane] = cursor->x_begin + (int)lane;
         block->color_address[lane] = first_color_address + lane * primitive->framebuffer.bytes_per_pixel;
@@ -356,24 +341,6 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
         }
         block->lod_fraction[lane] = 0u;
     }
-    if (!full_block) {
-        for (uint32_t lane = 0; lane < count; lane++) {
-            const raster_coverage *coverage = &edge_coverage[lane];
-            if (coverage->count == 0u || coverage->count == 8u) continue;
-            block->s[lane] = centroid_adjust(block->s[lane], decoded->texture.dsdx,
-                decoded->texture.dsdy, coverage);
-            block->t[lane] = centroid_adjust(block->t[lane], decoded->texture.dtdx,
-                decoded->texture.dtdy, coverage);
-            block->w[lane] = centroid_adjust(block->w[lane], decoded->texture.dwdx,
-                decoded->texture.dwdy, coverage);
-            for (uint32_t component = 0; component < 4u; component++) {
-                const int32_t interpolated = (int32_t)((uint32_t)base[component] +
-                    lane * (uint32_t)dr[component]);
-                block->shade[component][lane] = shade_component_to_u8(
-                    centroid_adjust(interpolated, dr[component], shade_dy[component], coverage));
-            }
-        }
-    }
     if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
     if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
         cursor->s_fixed = (int32_t)((uint32_t)cursor->s_fixed + count * (uint32_t)decoded->texture.dsdx);
@@ -388,6 +355,53 @@ static void setup_triangle_block(const rdp_primitive_state *primitive,
         cursor->shade.a = (int32_t)((uint32_t)cursor->shade.a + count * (uint32_t)dr[3]);
     }
     cursor->x_begin += (int)count;
+}
+
+static void setup_triangle_edge_block(const rdp_primitive_state *primitive,
+                                      rdp_span_work *cursor,
+                                      uint32_t count,
+                                      rdp_fragment_block *block)
+{
+    const rdp_span_work start = *cursor;
+    setup_triangle_full_block(primitive, cursor, count, block);
+
+    const raster_decoded_triangle *decoded = &primitive->triangle;
+    const int32_t shade_dx[4] = {
+        decoded->shade.drdx & ~0x1f, decoded->shade.dgdx & ~0x1f,
+        decoded->shade.dbdx & ~0x1f, decoded->shade.dadx & ~0x1f
+    };
+    const int32_t shade_dy[4] = {
+        decoded->shade.drdy, decoded->shade.dgdy,
+        decoded->shade.dbdy, decoded->shade.dady
+    };
+    const int32_t shade_base[4] = {
+        start.shade.r, start.shade.g, start.shade.b, start.shade.a
+    };
+    for (uint32_t lane = 0; lane < count; lane++) {
+        const raster_coverage coverage =
+            raster_coverage_evaluate(&start.coverage, (int)block->x[lane]);
+        block->coverage[lane] = coverage.count;
+        if (coverage.count == 0u ||
+            (!primitive->fragment.antialias && !coverage.center_covered)) {
+            block->active_mask &= (uint16_t)~(1u << lane);
+            continue;
+        }
+        if (coverage.count == 8u) continue;
+
+        block->s[lane] = centroid_adjust(block->s[lane], decoded->texture.dsdx,
+            decoded->texture.dsdy, &coverage);
+        block->t[lane] = centroid_adjust(block->t[lane], decoded->texture.dtdx,
+            decoded->texture.dtdy, &coverage);
+        block->w[lane] = centroid_adjust(block->w[lane], decoded->texture.dwdx,
+            decoded->texture.dwdy, &coverage);
+        for (uint32_t component = 0; component < 4u; component++) {
+            const int32_t interpolated = (int32_t)((uint32_t)shade_base[component] +
+                lane * (uint32_t)shade_dx[component]);
+            block->shade[component][lane] = shade_component_to_u8(
+                centroid_adjust(interpolated, shade_dx[component],
+                    shade_dy[component], &coverage));
+        }
+    }
 }
 
 /*
@@ -416,11 +430,26 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
     rdp_span_work cursor = *work;
     const int total = work->x_end - work->x_begin + 1;
 
-    for (int offset = 0; offset < total; offset += (int)RDP_PACKET_LANES) {
+    for (int processed = 0; processed < total;) {
         rdp_fragment_block block;
-        const uint32_t count = (uint32_t)(total - offset) < RDP_PACKET_LANES
-            ? (uint32_t)(total - offset) : RDP_PACKET_LANES;
-        setup_triangle_block(primitive, &cursor, count, &block);
+        uint32_t count = (uint32_t)(total - processed) < RDP_PACKET_LANES
+            ? (uint32_t)(total - processed) : RDP_PACKET_LANES;
+        const bool full = cursor.x_begin >= cursor.coverage.full_x0 &&
+                          cursor.x_begin <= cursor.coverage.full_x1;
+        if (full) {
+            const uint32_t interior = (uint32_t)(cursor.coverage.full_x1 -
+                                                 cursor.x_begin + 1);
+            if (count > interior) count = interior;
+            setup_triangle_full_block(primitive, &cursor, count, &block);
+        } else {
+            if (cursor.x_begin < cursor.coverage.full_x0) {
+                const uint32_t edge = (uint32_t)(cursor.coverage.full_x0 -
+                                                 cursor.x_begin);
+                if (count > edge) count = edge;
+            }
+            setup_triangle_edge_block(primitive, &cursor, count, &block);
+        }
+        processed += (int)count;
 
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_FILL) {
             for (uint32_t lane = 0; lane < count; lane++) {
