@@ -267,10 +267,9 @@ static sr_result load_rgba32_block(tmem_state *tmem, sr_memory *memory,
                                      &texel)) return SR_ERROR_INVALID_ARGUMENT;
             const uint32_t logical = tile->tmem + x * 2u;
             const uint32_t rg = tmem_physical_word_byte(
-                logical ^ ((dxt_row & 1u) ? 4u : 0u));
-            if (rg + 1u >= 0x800u ||
-                !tmem_write_be16(tmem, rg, (uint16_t)(texel >> 16)) ||
-                !tmem_write_be16(tmem, rg + 0x800u, (uint16_t)texel))
+                logical ^ ((dxt_row & 1u) ? 4u : 0u)) & 0x7ffu;
+            if (!tmem_write_be16(tmem, rg, (uint16_t)(texel >> 16)) ||
+                !tmem_write_be16(tmem, rg | 0x800u, (uint16_t)texel))
                 return SR_ERROR_INVALID_ARGUMENT;
         }
     }
