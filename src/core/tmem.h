@@ -161,11 +161,14 @@ static inline bool tmem_resolve_rgba32_address_raw(const rdp_tile *tile,
     }
 
     const uint32_t logical = tile->tmem + local_t * stride + local_s * 2u;
-    address->byte = tmem_physical_word_byte(logical ^ ((local_t & 1u) ? 4u : 0u));
-    address->byte2 = address->byte + 0x800u;
+    /* RGBA32 is split across the two 2 KiB TMEM banks. The tile address
+     * selects within a bank; it must not linearly run past the end of TMEM. */
+    address->byte = tmem_physical_word_byte(
+        logical ^ ((local_t & 1u) ? 4u : 0u)) & 0x7ffu;
+    address->byte2 = address->byte | 0x800u;
     address->subtexel = 0;
     address->bytes = 4;
-    return address->byte + 1u < SR_TMEM_SIZE && address->byte2 + 1u < SR_TMEM_SIZE;
+    return true;
 }
 
 static inline bool tmem_tile_extent_from_descriptor(const rdp_tile *tile, uint32_t *width, uint32_t *height)
