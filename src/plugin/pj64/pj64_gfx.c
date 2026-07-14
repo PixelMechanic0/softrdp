@@ -1113,10 +1113,12 @@ void PJ64_CALL DllAbout(HWND hwnd)
     (void)hwnd;
 }
 
+#ifdef HAS_CONFIG
 void PJ64_CALL DllConfig(HWND hwnd)
 {
     (void)hwnd;
 }
+#endif
 
 void PJ64_CALL DllTest(HWND hwnd)
 {
