@@ -908,16 +908,9 @@ void PJ64_CALL ProcessRDPList(void)
 
 void PJ64_CALL DrawScreen(void)
 {
-#if SOFTRDP_ENABLE_PERF_LOG
-    LARGE_INTEGER start, end, freq;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&start);
-#endif
-    sr_present_draw(&g_present);
-#if SOFTRDP_ENABLE_PERF_LOG
-    QueryPerformanceCounter(&end);
-    g_perf_draw_total_ms += (double)(end.QuadPart - start.QuadPart) * 1000.0 / (double)freq.QuadPart;
-#endif
+    /* UpdateScreen owns presentation. PJ64 may call DrawScreen separately;
+     * swapping here as well presents one frame twice and can block twice on
+     * the display driver. */
 }
 
 void PJ64_CALL ReadScreen(void **dest, long *width, long *height)

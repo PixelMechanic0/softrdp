@@ -22,6 +22,7 @@
 #endif
 
 typedef HGLRC(WINAPI *wgl_create_context_attribs_arb_proc)(HDC hdc, HGLRC share, const int *attribs);
+typedef BOOL(WINAPI *wgl_swap_interval_ext_proc)(int interval);
 typedef void(APIENTRY *gl_attach_shader_proc)(GLuint program, GLuint shader);
 typedef void(APIENTRY *gl_bind_vertex_array_proc)(GLuint array);
 typedef void(APIENTRY *gl_compile_shader_proc)(GLuint shader);
@@ -40,6 +41,7 @@ typedef void(APIENTRY *gl_uniform_1i_proc)(GLint location, GLint v0);
 typedef void(APIENTRY *gl_use_program_proc)(GLuint program);
 
 static wgl_create_context_attribs_arb_proc p_wglCreateContextAttribsARB;
+static wgl_swap_interval_ext_proc p_wglSwapIntervalEXT;
 static gl_attach_shader_proc p_glAttachShader;
 static gl_bind_vertex_array_proc p_glBindVertexArray;
 static gl_compile_shader_proc p_glCompileShader;
@@ -161,7 +163,18 @@ static bool make_gl_context(sr_present *present)
     }
 
     present->glrc = modern;
-    return load_gl33_procs();
+    if (!load_gl33_procs()) {
+        return false;
+    }
+
+    /* PJ64's speed limiter is independent of the driver's swap interval.
+     * Keep presentation uncapped when VI VSync is disabled, so SwapBuffers cannot impose the desktop refresh rate. */
+    p_wglSwapIntervalEXT =
+        (wgl_swap_interval_ext_proc)load_gl_proc("wglSwapIntervalEXT");
+    if (p_wglSwapIntervalEXT) {
+        (void)p_wglSwapIntervalEXT(0);
+    }
+    return true;
 }
 
 static GLuint compile_shader(GLenum type, const char *source)
@@ -351,17 +364,20 @@ void sr_present_shutdown(sr_present *present)
         }
     } else {
         if (present->glrc) {
-            wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc);
-            if (present->texture) {
-                glDeleteTextures(1, &present->texture);
+            const BOOL current = wglMakeCurrent((HDC)present->hdc,
+                                                (HGLRC)present->glrc);
+            if (current) {
+                if (present->texture) {
+                    glDeleteTextures(1, &present->texture);
+                }
+                if (present->vao && p_glDeleteVertexArrays) {
+                    p_glDeleteVertexArrays(1, &present->vao);
+                }
+                if (present->program && p_glDeleteProgram) {
+                    p_glDeleteProgram(present->program);
+                }
+                wglMakeCurrent(NULL, NULL);
             }
-            if (present->vao && p_glDeleteVertexArrays) {
-                p_glDeleteVertexArrays(1, &present->vao);
-            }
-            if (present->program && p_glDeleteProgram) {
-                p_glDeleteProgram(present->program);
-            }
-            wglMakeCurrent(NULL, NULL);
             wglDeleteContext((HGLRC)present->glrc);
         }
 
@@ -408,6 +424,7 @@ void sr_present_clear(sr_present *present)
 
     if (!present->external_context) {
         SwapBuffers((HDC)present->hdc);
+        wglMakeCurrent(NULL, NULL);
     }
 }
 
@@ -494,6 +511,7 @@ void sr_present_draw(sr_present *present)
 
     if (!present->external_context) {
         SwapBuffers((HDC)present->hdc);
+        wglMakeCurrent(NULL, NULL);
     }
 }
 
