@@ -1,27 +1,24 @@
 #include "raster_coverage.h"
 
-static int16_t centroid_q8(int32_t sum, uint32_t count)
+static inline uint8_t coverage_popcount(uint8_t mask)
 {
-    /* Count is one of eight compile-time divisors. The compiler lowers these
-     * cases to multiplies/shifts; no data-dependent integer divide remains. */
-    switch (count) {
-    case 1u: return (int16_t)(sum * 32);
-    case 2u: return (int16_t)(sum * 16);
-    case 3u: return (int16_t)(sum * 32 / 3);
-    case 4u: return (int16_t)(sum * 8);
-    case 5u: return (int16_t)(sum * 32 / 5);
-    case 6u: return (int16_t)(sum * 16 / 3);
-    case 7u: return (int16_t)(sum * 32 / 7);
-    default: return 0;
-    }
+#if defined(__GNUC__) || defined(__clang__)
+    return (uint8_t)__builtin_popcount((unsigned)mask);
+#else
+    mask = (uint8_t)(mask - ((mask >> 1) & 0x55u));
+    mask = (uint8_t)((mask & 0x33u) + ((mask >> 2) & 0x33u));
+    return (uint8_t)((mask + (mask >> 4)) & 0x0fu);
+#endif
 }
 
 raster_coverage raster_coverage_evaluate(const raster_coverage_span *span, int x)
 {
     raster_coverage result = {0};
     if (x >= span->full_x0 && x <= span->full_x1) {
+        result.mask = 0xffu;
         result.count = 8u;
-        result.center_covered = true;
+        result.first_x_eighth = -4;
+        result.first_y_eighth = -4;
         return result;
     }
 
@@ -30,28 +27,29 @@ raster_coverage raster_coverage_evaluate(const raster_coverage_span *span, int x
     static const int8_t sample_x[4][2] = {
         { 0, 4 }, { 2, 6 }, { 0, 4 }, { 2, 6 }
     };
-    static const int8_t sample_y[4] = { 0, 2, 4, 6 };
     const int32_t pixel_base = x << 16;
-    int32_t centroid_x_sum = 0;
-    int32_t centroid_y_sum = 0;
+    uint8_t mask = 0u;
     for (uint32_t row = 0; row < 4u; row++) {
         if (!(span->valid_rows & (1u << row))) continue;
         for (uint32_t sample = 0; sample < 2u; sample++) {
             const int32_t position = pixel_base + (int32_t)sample_x[row][sample] * 8192;
-            if (position >= span->left[row] && position < span->right[row]) {
-                result.count++;
-                centroid_x_sum += sample_x[row][sample] - 4;
-                centroid_y_sum += sample_y[row] - 4;
-            }
+            if (position >= span->left[row] && position < span->right[row])
+                mask |= (uint8_t)(1u << (row * 2u + sample));
         }
     }
-    result.centroid_x_q8 = centroid_q8(centroid_x_sum, result.count);
-    result.centroid_y_q8 = centroid_q8(centroid_y_sum, result.count);
-
-    /* Non-antialiased rendering uses the geometric pixel center, independent
-     * of which multisample bit happened to be assigned first. */
-    const int32_t center = pixel_base + 0x8000;
-    result.center_covered = (span->valid_rows & (1u << 2)) != 0u &&
-        center >= span->left[2] && center < span->right[2];
+    result.mask = mask;
+    result.count = coverage_popcount(mask);
+    if (mask) {
+#if defined(__GNUC__) || defined(__clang__)
+        const uint32_t first = (uint32_t)__builtin_ctz((unsigned)mask);
+#else
+        uint32_t first = 0u;
+        while (!(mask & (uint8_t)(1u << first))) first++;
+#endif
+        const uint32_t row = first >> 1;
+        const uint32_t sample = first & 1u;
+        result.first_x_eighth = (int8_t)(sample_x[row][sample] - 4);
+        result.first_y_eighth = (int8_t)((int32_t)row * 2 - 4);
+    }
     return result;
 }

@@ -295,15 +295,15 @@ static inline int32_t rectangle_sample_coord(int32_t base, int32_t step,
     return shift ? (int32_t)(accumulated >> shift) : (int32_t)accumulated;
 }
 
-static inline int32_t centroid_adjust(int32_t value,
-                                      int32_t dx,
-                                      int32_t dy,
-                                      const raster_coverage *coverage)
+static inline int32_t coverage_sample_adjust(int32_t value,
+                                             int32_t dx,
+                                             int32_t dy,
+                                             const raster_coverage *coverage)
 {
     if (coverage->count == 0u || coverage->count == 8u) return value;
-    const int64_t scaled = (int64_t)dx * coverage->centroid_x_q8 +
-                           (int64_t)dy * coverage->centroid_y_q8;
-    const int64_t correction = scaled >= 0 ? scaled >> 8 : -((-scaled) >> 8);
+    const int64_t scaled = (int64_t)dx * coverage->first_x_eighth +
+                           (int64_t)dy * coverage->first_y_eighth;
+    const int64_t correction = scaled >= 0 ? scaled >> 3 : -((-scaled) >> 3);
     return (int32_t)((int64_t)value + correction);
 }
 
@@ -526,23 +526,23 @@ static void setup_triangle_edge_block(const rdp_primitive_state *primitive,
             raster_coverage_evaluate(&start.coverage, (int)block->x[lane]);
         block->coverage[lane] = coverage.count;
         if (coverage.count == 0u ||
-            (!primitive->fragment.antialias && !coverage.center_covered)) {
+            (!primitive->fragment.antialias && !(coverage.mask & 1u))) {
             block->active_mask &= (uint16_t)~(1u << lane);
             continue;
         }
         if (coverage.count == 8u) continue;
 
-        block->s[lane] = centroid_adjust(block->s[lane], decoded->texture.dsdx,
+        block->s[lane] = coverage_sample_adjust(block->s[lane], decoded->texture.dsdx,
             decoded->texture.dsdy, &coverage);
-        block->t[lane] = centroid_adjust(block->t[lane], decoded->texture.dtdx,
+        block->t[lane] = coverage_sample_adjust(block->t[lane], decoded->texture.dtdx,
             decoded->texture.dtdy, &coverage);
-        block->w[lane] = centroid_adjust(block->w[lane], decoded->texture.dwdx,
+        block->w[lane] = coverage_sample_adjust(block->w[lane], decoded->texture.dwdx,
             decoded->texture.dwdy, &coverage);
         for (uint32_t component = 0; component < 4u; component++) {
             const int32_t interpolated = (int32_t)((uint32_t)shade_base[component] +
                 lane * (uint32_t)shade_dx[component]);
             block->shade[component][lane] = shade_component_to_u8(
-                centroid_adjust(interpolated, shade_dx[component],
+                coverage_sample_adjust(interpolated, shade_dx[component],
                     shade_dy[component], &coverage));
         }
     }

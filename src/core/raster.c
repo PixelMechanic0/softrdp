@@ -123,6 +123,39 @@ typedef struct raster_span {
     raster_coverage_span coverage;
 } raster_span;
 
+typedef struct raster_edge_cursor {
+    int64_t major[4];
+    int64_t upper[4];
+    int64_t lower[4];
+} raster_edge_cursor;
+
+static void raster_edge_cursor_init(raster_edge_cursor *cursor,
+                                    const raster_triangle_setup *setup,
+                                    int y)
+{
+    const int64_t yh_base = (int64_t)setup->yh & ~3ll;
+    for (int row = 0; row < 4; row++) {
+        const int64_t y_sub = (int64_t)y * 4 + row;
+        const int64_t dy_h = y_sub - yh_base;
+        cursor->major[row] = (int64_t)setup->xh +
+            fixed_floor_div((int64_t)setup->dxhdy * dy_h, 4);
+        cursor->upper[row] = (int64_t)setup->xm +
+            fixed_floor_div((int64_t)setup->dxmdy * dy_h, 4);
+        cursor->lower[row] = (int64_t)setup->xl +
+            fixed_floor_div((int64_t)setup->dxldy * (y_sub - setup->ym), 4);
+    }
+}
+
+static inline void raster_edge_cursor_advance(raster_edge_cursor *cursor,
+                                              const raster_triangle_setup *setup)
+{
+    for (int row = 0; row < 4; row++) {
+        cursor->major[row] += setup->dxhdy;
+        cursor->upper[row] += setup->dxmdy;
+        cursor->lower[row] += setup->dxldy;
+    }
+}
+
 static int32_t clamp_edge_x(int64_t x, int32_t minimum, int32_t maximum)
 {
     if (x < minimum) return minimum;
@@ -132,12 +165,12 @@ static int32_t clamp_edge_x(int64_t x, int32_t minimum, int32_t maximum)
 
 static bool triangle_span_for_y(const raster_triangle_setup *setup,
                                 const rdp_state *state,
+                                const raster_edge_cursor *cursor,
                                 int y,
                                 raster_span *span)
 {
     static const int sample_min[4] = { 0, 2, 0, 2 };
     static const int sample_max[4] = { 4, 6, 4, 6 };
-    const int64_t yh_base = (int64_t)setup->yh & ~3ll;
     const int scissor_y0 = state->scissor_y0 ? (int)state->scissor_y0 : 0;
     const int scissor_y1 = state->scissor_y1 ? (int)state->scissor_y1 : 0x1000;
     const int32_t scissor_x0 = state->scissor_x0 ? (int32_t)state->scissor_x0 << 14 : 0;
@@ -156,17 +189,9 @@ static bool triangle_span_for_y(const raster_triangle_setup *setup,
             continue;
         }
 
-        const int64_t dy_h = y_sub - yh_base;
-        const int64_t xh = (int64_t)setup->xh +
-            fixed_floor_div((int64_t)setup->dxhdy * dy_h, 4);
-        int64_t xl;
-        if (y_sub < setup->ym) {
-            xl = (int64_t)setup->xm +
-                fixed_floor_div((int64_t)setup->dxmdy * dy_h, 4);
-        } else {
-            xl = (int64_t)setup->xl + fixed_floor_div(
-                (int64_t)setup->dxldy * (y_sub - setup->ym), 4);
-        }
+        const int64_t xh = cursor->major[row];
+        const int64_t xl = y_sub < setup->ym
+            ? cursor->upper[row] : cursor->lower[row];
 
         const int32_t left = clamp_edge_x(setup->flip ? xh : xl, scissor_x0, scissor_x1);
         const int32_t right = clamp_edge_x(setup->flip ? xl : xh, scissor_x0, scissor_x1);
@@ -312,11 +337,17 @@ sr_result raster_submit_triangle(sr_memory *memory,
                               &decoded,
                               fill_triangle);
 
+    raster_edge_cursor edge_cursor;
+    if (!fill_triangle)
+        raster_edge_cursor_init(&edge_cursor, &decoded.position, yh);
+
     for (int y = yh; y < yl; y++) {
         raster_span span;
         const bool has_span = fill_triangle
             ? fill_triangle_span_for_y(&decoded.position, state, y, &span)
-            : triangle_span_for_y(&decoded.position, state, y, &span);
+            : triangle_span_for_y(&decoded.position, state, &edge_cursor, y, &span);
+        if (!fill_triangle)
+            raster_edge_cursor_advance(&edge_cursor, &decoded.position);
         if (!has_span) {
             continue;
         }
