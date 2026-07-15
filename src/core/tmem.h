@@ -777,23 +777,33 @@ static inline bool tmem_sample_compact_bilerp_fixed5(const tmem_state *tmem,
     const uint32_t frac_s = (uint32_t)(shifted_s - ((int32_t)tile->sl << 3)) & 31u;
     const uint32_t frac_t = (uint32_t)(shifted_t - ((int32_t)tile->tl << 3)) & 31u;
     rdp_color c00, c10, c01, c11;
-    if (tmem_fetch_compact_local(tmem, sample, s0, t0, &c00) &&
-        tmem_fetch_compact_local(tmem, sample, s1, t0, &c10) &&
-        tmem_fetch_compact_local(tmem, sample, s0, t1, &c01) &&
-        tmem_fetch_compact_local(tmem, sample, s1, t1, &c11)) {
-        if (sample->mid_texel && frac_s == 16u && frac_t == 16u) {
+    if (sample->mid_texel && frac_s == 16u && frac_t == 16u) {
+        if (tmem_fetch_compact_local(tmem, sample, s0, t0, &c00) &&
+            tmem_fetch_compact_local(tmem, sample, s1, t0, &c10) &&
+            tmem_fetch_compact_local(tmem, sample, s0, t1, &c01) &&
+            tmem_fetch_compact_local(tmem, sample, s1, t1, &c11)) {
             *color = (rdp_color){
                 (uint8_t)(((uint32_t)c00.r + c10.r + c01.r + c11.r + 2u) >> 2),
                 (uint8_t)(((uint32_t)c00.g + c10.g + c01.g + c11.g + 2u) >> 2),
                 (uint8_t)(((uint32_t)c00.b + c10.b + c01.b + c11.b + 2u) >> 2),
                 (uint8_t)(((uint32_t)c00.a + c10.a + c01.a + c11.a + 2u) >> 2)
             };
-        } else if (frac_s + frac_t >= 32u) {
-            *color = bilerp_3tap_color(c11, c10, c01, 32u - frac_t, 32u - frac_s);
-        } else {
-            *color = bilerp_3tap_color(c00, c10, c01, frac_s, frac_t);
+            return true;
         }
-        return true;
+    } else if (frac_s + frac_t >= 32u) {
+        if (tmem_fetch_compact_local(tmem, sample, s1, t1, &c11) &&
+            tmem_fetch_compact_local(tmem, sample, s1, t0, &c10) &&
+            tmem_fetch_compact_local(tmem, sample, s0, t1, &c01)) {
+            *color = bilerp_3tap_color(c11, c10, c01, 32u - frac_t, 32u - frac_s);
+            return true;
+        }
+    } else {
+        if (tmem_fetch_compact_local(tmem, sample, s0, t0, &c00) &&
+            tmem_fetch_compact_local(tmem, sample, s1, t0, &c10) &&
+            tmem_fetch_compact_local(tmem, sample, s0, t1, &c01)) {
+            *color = bilerp_3tap_color(c00, c10, c01, frac_s, frac_t);
+            return true;
+        }
     }
     return tmem_fetch_compact_local(tmem, sample, s0, t0, color);
 }

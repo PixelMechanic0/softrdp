@@ -1,7 +1,8 @@
+extern "C" {
 #include "fragment.h"
-
 #include "blender.h"
 #include "framebuffer.h"
+}
 
 static uint8_t dither_component(uint8_t value, uint8_t threshold)
 {
@@ -33,6 +34,57 @@ static rdp_color dither_rgb(rdp_color color, uint8_t mode, uint32_t x, uint32_t 
     return color;
 }
 
+template <rdp_texture_size Size>
+static sr_result finish_color_lanes(sr_memory *memory,
+                                    const rdp_primitive_state *primitive,
+                                    rdp_fragment_block *packet,
+                                    uint16_t active)
+{
+    const rdp_fragment_state *state = &primitive->fragment;
+    for (uint32_t lane = 0; lane < packet->count; lane++) {
+        const uint16_t bit = (uint16_t)(1u << lane);
+        if (!(active & bit)) continue;
+        rdp_color pixel = {
+            (uint8_t)packet->color[0][lane], (uint8_t)packet->color[1][lane],
+            (uint8_t)packet->color[2][lane], (uint8_t)packet->color[3][lane]
+        };
+        rdp_memory_pixel memory_pixel;
+        const sr_result result = framebuffer_read_memory_address(
+            memory, Size, packet->color_address[lane],
+            state->blend.image_read, &memory_pixel);
+        if (result != SR_OK) return result;
+        const uint8_t memory_coverage = memory_pixel.coverage;
+        const bool overflow = ((packet->coverage[lane] + memory_coverage) & 8u) != 0u;
+        const bool blend_enable = state->blend.force_blend ||
+                                  (state->antialias && !overflow);
+        pixel = rdp_blender_evaluate(&state->blend, pixel, packet->alpha[lane],
+                                     memory_pixel.color,
+                                     (uint8_t)packet->shade[3][lane], blend_enable);
+        uint32_t final_coverage;
+        switch (state->coverage_dest & 3u) {
+        case 0:
+            final_coverage = blend_enable
+                ? packet->coverage[lane] + memory_coverage
+                : packet->coverage[lane] - 1u;
+            if (final_coverage > 7u) final_coverage = 7u;
+            break;
+        case 1: final_coverage = (packet->coverage[lane] + memory_coverage) & 7u; break;
+        case 2: final_coverage = 7u; break;
+        default: final_coverage = memory_coverage; break;
+        }
+        pixel.a = (uint8_t)((final_coverage << 5) | 0x1fu);
+        const uint32_t pixel_index = packet->y *
+            primitive->framebuffer.color_image.width + packet->x[lane];
+        if constexpr (Size == RDP_SIZE_16BPP)
+            pixel = dither_rgb(pixel, state->rgb_dither, packet->x[lane], packet->y);
+        const sr_result write_result = framebuffer_write_color_address(
+            memory, Size, packet->color_address[lane], pixel_index, pixel);
+        if (write_result != SR_OK) return write_result;
+    }
+    return SR_OK;
+}
+
+extern "C"
 sr_result fragment_finish_packet(sr_memory *memory,
                                  const rdp_primitive_state *primitive,
                                  rdp_fragment_block *packet)
@@ -69,46 +121,16 @@ sr_result fragment_finish_packet(sr_memory *memory,
     }
 
     packet->accepted_mask = active;
-    /* The remaining scalar stages share one lane-local color value. This keeps
-     * framebuffer read, blender, coverage destination, and commit in one pass
-     * without materializing another packet representation. */
-    for (uint32_t lane = 0; lane < packet->count; lane++) {
-        const uint16_t bit = (uint16_t)(1u << lane);
-        if (!(active & bit)) continue;
-        rdp_color pixel = {
-            (uint8_t)packet->color[0][lane], (uint8_t)packet->color[1][lane],
-            (uint8_t)packet->color[2][lane], (uint8_t)packet->color[3][lane]
-        };
-        rdp_memory_pixel memory_pixel;
-        const sr_result result = framebuffer_read_memory_address(memory,
-            primitive->framebuffer.color_image.size, packet->color_address[lane],
-            state->blend.image_read, &memory_pixel);
-        if (result != SR_OK) return result;
-        const uint8_t memory_coverage = memory_pixel.coverage;
-        const bool overflow = ((packet->coverage[lane] + memory_coverage) & 8u) != 0u;
-        const bool blend_enable = state->blend.force_blend || (state->antialias && !overflow);
-        pixel = rdp_blender_evaluate(&state->blend, pixel, packet->alpha[lane],
-                                     memory_pixel.color, (uint8_t)packet->shade[3][lane],
-                                     blend_enable);
-        uint32_t final_coverage;
-        switch (state->coverage_dest & 3u) {
-        case 0:
-            final_coverage = blend_enable
-                ? packet->coverage[lane] + memory_coverage : packet->coverage[lane] - 1u;
-            if (final_coverage > 7u) final_coverage = 7u;
-            break;
-        case 1: final_coverage = (packet->coverage[lane] + memory_coverage) & 7u; break;
-        case 2: final_coverage = 7u; break;
-        default: final_coverage = memory_coverage; break;
-        }
-        pixel.a = (uint8_t)((final_coverage << 5) | 0x1fu);
-        const uint32_t pixel_index = packet->y * primitive->framebuffer.color_image.width + packet->x[lane];
-        if (primitive->framebuffer.color_image.size == RDP_SIZE_16BPP)
-            pixel = dither_rgb(pixel, state->rgb_dither, packet->x[lane], packet->y);
-        const sr_result write_result = framebuffer_write_color_address(memory,
-            primitive->framebuffer.color_image.size, packet->color_address[lane],
-            pixel_index, pixel);
-        if (write_result != SR_OK) return write_result;
+    /* Framebuffer format is constant for the primitive. Dispatch once per
+     * packet so reads, dithering, packing, and writes specialize together. */
+    switch (primitive->framebuffer.color_image.size) {
+    case RDP_SIZE_8BPP:
+        return finish_color_lanes<RDP_SIZE_8BPP>(memory, primitive, packet, active);
+    case RDP_SIZE_16BPP:
+        return finish_color_lanes<RDP_SIZE_16BPP>(memory, primitive, packet, active);
+    case RDP_SIZE_32BPP:
+        return finish_color_lanes<RDP_SIZE_32BPP>(memory, primitive, packet, active);
+    default:
+        return SR_ERROR_UNSUPPORTED;
     }
-    return SR_OK;
 }

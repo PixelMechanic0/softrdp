@@ -182,10 +182,8 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     const uint8_t cycle0_inputs = primitive->color.two_cycle
         ? pipeline_combiner_cycle_mask(&registers->combiner.cycle[0]) : 0u;
     const uint8_t active_combiner_inputs = cycle0_inputs | cycle1_inputs;
-    /* In two-cycle mode the RDP advances the texture pipeline before cycle 1:
-     * logical TEXEL0 is the current tile-1 sample and logical TEXEL1 is the
-     * next pixel's tile-0 sample. Keep these physical sampler needs separate
-     * from the decoded combiner names. */
+    /* Match ParallelRDP's two-cycle model: cycle 1 promotes the physical
+     * tile-1 sample to TEXEL0 and aliases TEXEL1 back to physical TEXEL0. */
     primitive->color.needs_texel0 = primitive->color.two_cycle
         ? ((cycle0_inputs & RDP_COMBINER_INPUT_TEXEL0) != 0u ||
            (cycle1_inputs & RDP_COMBINER_INPUT_TEXEL1) != 0u)
@@ -194,8 +192,6 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
         ? ((cycle0_inputs & RDP_COMBINER_INPUT_TEXEL1) != 0u ||
            (cycle1_inputs & RDP_COMBINER_INPUT_TEXEL0) != 0u)
         : (cycle1_inputs & RDP_COMBINER_INPUT_TEXEL1) != 0u;
-    primitive->color.needs_next_texel0 = primitive->color.two_cycle &&
-        (cycle1_inputs & RDP_COMBINER_INPUT_TEXEL1) != 0u;
     primitive->color.needs_shade = (active_combiner_inputs & RDP_COMBINER_INPUT_SHADE) != 0;
     primitive->color.needs_lod_fraction =
         (active_combiner_inputs & RDP_COMBINER_INPUT_LOD_FRACTION) != 0;

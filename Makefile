@@ -81,6 +81,9 @@ $(BUILD_DIR)/core_%.o: src/core/%.c | dirs
 $(BUILD_DIR)/core_pipeline.o: src/core/pipeline.c | dirs
 	$(CXX) $(CXXFLAGS) -x c++ -c $< -o $@
 
+$(BUILD_DIR)/core_fragment.o: src/core/fragment.c | dirs
+	$(CXX) $(CXXFLAGS) -x c++ -c $< -o $@
+
 $(BUILD_DIR)/pj64_%.o: src/plugin/pj64/%.c | dirs
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -94,6 +97,9 @@ $(BUILD32_DIR)/core_%.o: src/core/%.c | dirs32
 	$(PJ64_CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD32_DIR)/core_pipeline.o: src/core/pipeline.c | dirs32
+	$(PJ64_CXX) $(CXXFLAGS) -x c++ -c $< -o $@
+
+$(BUILD32_DIR)/core_fragment.o: src/core/fragment.c | dirs32
 	$(PJ64_CXX) $(CXXFLAGS) -x c++ -c $< -o $@
 
 $(BUILD32_DIR)/pj64_%.o: src/plugin/pj64/%.c | dirs32

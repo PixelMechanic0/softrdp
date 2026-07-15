@@ -268,9 +268,9 @@ static inline __m256i simd_load_source(uint32_t source,
     case RDP_COMBINER_TEXEL0_ALPHA: return load_extend_8(second_cycle
         ? &packet->texel1[3][offset] : &packet->texel0[3][offset]);
     case RDP_COMBINER_TEXEL1_RGB: return load_extend_8(second_cycle
-        ? &packet->next_texel0[component][offset] : &packet->texel1[component][offset]);
+        ? &packet->texel0[component][offset] : &packet->texel1[component][offset]);
     case RDP_COMBINER_TEXEL1_ALPHA: return load_extend_8(second_cycle
-        ? &packet->next_texel0[3][offset] : &packet->texel1[3][offset]);
+        ? &packet->texel0[3][offset] : &packet->texel1[3][offset]);
     case RDP_COMBINER_SHADE_RGB: return load_extend_8(&packet->shade[component][offset]);
     case RDP_COMBINER_SHADE_ALPHA: return load_extend_8(&packet->shade[3][offset]);
     case RDP_COMBINER_PRIMITIVE_RGB: {
@@ -368,7 +368,6 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
                 packet->shade[component][lane] = 0u;
                 packet->texel0[component][lane] = 0u;
                 packet->texel1[component][lane] = 0u;
-                packet->next_texel0[component][lane] = 0u;
             }
             packet->lod_fraction[lane] = 0u;
         }
@@ -429,8 +428,8 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
                 (uint8_t)packet->texel1[0][lane], (uint8_t)packet->texel1[1][lane],
                 (uint8_t)packet->texel1[2][lane], (uint8_t)packet->texel1[3][lane] };
             inputs.texel1 = (rdp_color){
-                (uint8_t)packet->next_texel0[0][lane], (uint8_t)packet->next_texel0[1][lane],
-                (uint8_t)packet->next_texel0[2][lane], (uint8_t)packet->next_texel0[3][lane] };
+                (uint8_t)packet->texel0[0][lane], (uint8_t)packet->texel0[1][lane],
+                (uint8_t)packet->texel0[2][lane], (uint8_t)packet->texel0[3][lane] };
         }
         evaluate_cycle(&state->program.cycle[1], &inputs, &combined_value);
         const rdp_color output = { clamp_9(combined_value.r), clamp_9(combined_value.g),
