@@ -395,10 +395,11 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
                                                    (1u << raw_memory_delta));
         const bool nearer = new_depth <= old_depth + delta * 8u;
         const bool farther = new_depth + delta * 8u >= old_depth;
-        bool overflow = current_coverage == 8u;
-        if (!overflow) {
+        bool overflow = true;
+        if ((depth->mode & 3u) < 2u && current_coverage != 8u) {
             uint8_t memory_coverage = 7u;
-            if (primitive->fragment.blend.image_read) {
+            if (primitive->fragment.blend.image_read &&
+                primitive->framebuffer.color_image.size != RDP_SIZE_8BPP) {
                 rdp_memory_pixel memory_pixel;
                 const sr_result read_result = framebuffer_read_memory_address(memory,
                     primitive->framebuffer.color_image.size, color_addr, true,
