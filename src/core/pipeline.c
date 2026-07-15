@@ -576,19 +576,12 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
         rdp_fragment_block block;
         uint32_t count = (uint32_t)(total - processed) < RDP_PACKET_LANES
             ? (uint32_t)(total - processed) : RDP_PACKET_LANES;
-        const bool full = cursor.x_begin >= cursor.coverage.full_x0 &&
-                          cursor.x_begin <= cursor.coverage.full_x1;
-        if (full) {
-            const uint32_t interior = (uint32_t)(cursor.coverage.full_x1 -
-                                                 cursor.x_begin + 1);
-            if (count > interior) count = interior;
+        const int packet_x1 = cursor.x_begin + (int)count - 1;
+        const bool full_packet = cursor.x_begin >= cursor.coverage.full_x0 &&
+                                 packet_x1 <= cursor.coverage.full_x1;
+        if (full_packet) {
             setup_triangle_full_block(primitive, &cursor, count, &block);
         } else {
-            if (cursor.x_begin < cursor.coverage.full_x0) {
-                const uint32_t edge = (uint32_t)(cursor.coverage.full_x0 -
-                                                 cursor.x_begin);
-                if (count > edge) count = edge;
-            }
             setup_triangle_edge_block(primitive, &cursor, count, &block);
         }
         processed += (int)count;
