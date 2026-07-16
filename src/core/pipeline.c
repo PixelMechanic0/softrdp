@@ -761,37 +761,10 @@ static sr_result pipeline_render_rectangle_span_specialized(
                 }
             }
         }
-        if (needs_texture) {
-            for (uint32_t lane = 0; lane < count; lane++) {
-                const int32_t s = rectangle_sample_coord(work->s_fixed,
-                    work->dsdx_fixed, offset + lane, work->texture_coord_shift);
-                const int32_t t = rectangle_sample_coord(work->t_fixed,
-                    work->dtdx_fixed, offset + lane, work->texture_coord_shift);
-                rdp_color texel0, texel1;
-                const bool ok0 = !color->needs_texel0 ||
-                    sample_compiled_texture<Sampler>(primitive->tmem,
-                                             &primitive->texture, s, t, &texel0);
-                const bool ok1 = !color->needs_texel1 ||
-                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture_cycle1,
-                                             s, t, &texel1);
-                if (!ok0 || !ok1) {
-                    live_mask &= (uint16_t)~(1u << lane);
-                    continue;
-                }
-                if (color->needs_texel0) store_texel(packet.texel0, lane, texel0);
-                if (color->needs_texel1) store_texel(packet.texel1, lane, texel1);
-                if (!color->needs_texel1 && color->needs_texel0)
-                    store_texel(packet.texel1, lane, texel0);
-                if (!color->needs_texel0 && color->needs_texel1)
-                    store_texel(packet.texel0, lane, texel1);
-            }
-        }
-        if (live_mask == 0u) continue;
 
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
-                if (!(live_mask & bit)) continue;
                 const uint32_t x = (uint32_t)work->x_begin + offset + lane;
                 const uint32_t pixel = (uint32_t)work->y *
                     primitive->framebuffer.color_image.width + x;
@@ -805,6 +778,35 @@ static sr_result pipeline_render_rectangle_span_specialized(
                     8u, &depth_results[lane]);
                 if (depth_result != SR_OK) return depth_result;
                 if (!depth_results[lane].pass) live_mask &= (uint16_t)~bit;
+            }
+        }
+        if (live_mask == 0u) continue;
+
+        if (needs_texture) {
+            for (uint32_t lane = 0; lane < count; lane++) {
+                const uint16_t bit = (uint16_t)(1u << lane);
+                if (!(live_mask & bit)) continue;
+                const int32_t s = rectangle_sample_coord(work->s_fixed,
+                    work->dsdx_fixed, offset + lane, work->texture_coord_shift);
+                const int32_t t = rectangle_sample_coord(work->t_fixed,
+                    work->dtdx_fixed, offset + lane, work->texture_coord_shift);
+                rdp_color texel0, texel1;
+                const bool ok0 = !color->needs_texel0 ||
+                    sample_compiled_texture<Sampler>(primitive->tmem,
+                                             &primitive->texture, s, t, &texel0);
+                const bool ok1 = !color->needs_texel1 ||
+                    tmem_sample_color_fixed5(primitive->tmem, &primitive->texture_cycle1,
+                                             s, t, &texel1);
+                if (!ok0 || !ok1) {
+                    live_mask &= (uint16_t)~bit;
+                    continue;
+                }
+                if (color->needs_texel0) store_texel(packet.texel0, lane, texel0);
+                if (color->needs_texel1) store_texel(packet.texel1, lane, texel1);
+                if (!color->needs_texel1 && color->needs_texel0)
+                    store_texel(packet.texel1, lane, texel0);
+                if (!color->needs_texel0 && color->needs_texel1)
+                    store_texel(packet.texel0, lane, texel1);
             }
         }
         if (live_mask == 0u) continue;
