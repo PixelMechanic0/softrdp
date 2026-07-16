@@ -601,6 +601,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
 
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
             for (uint32_t lane = 0; lane < count; lane++) {
+                const uint16_t bit = (uint16_t)(1u << lane);
+                if (!(block.active_mask & bit)) continue;
                 rdp_span_work lane_work = {
                     .y = work->y,
                     .depth_fixed = block.depth_fixed[lane]
@@ -614,9 +616,9 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     &lane_work, depth_address, block.color_address[lane],
                     block.coverage[lane], &depth);
                 if (result != SR_OK) return result;
-                if (!depth.pass) block.active_mask &= (uint16_t)~(1u << lane);
+                if (!depth.pass) block.active_mask &= (uint16_t)~bit;
                 if (depth.update) {
-                    block.depth_update_mask |= (uint16_t)(1u << lane);
+                    block.depth_update_mask |= bit;
                     block.depth_address[lane] = depth.address;
                     block.depth_value[lane] = depth.compressed;
                 }
