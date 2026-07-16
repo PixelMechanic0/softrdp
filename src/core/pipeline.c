@@ -379,7 +379,7 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
         new_depth = overflow < 2u ? scaled & 0x3ffffu :
                     overflow == 2u ? 0x3ffffu : 0u;
     }
-    if (depth->compare || depth->update)
+    if (depth->compare)
         old_stored = sr_memory_read_be16_fast(memory, addr);
     if (depth->compare) {
         const uint32_t old_depth = rdp_depth_decompress(old_stored);
