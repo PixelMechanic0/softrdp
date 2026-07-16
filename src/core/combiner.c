@@ -90,22 +90,9 @@ static void finish_program(rdp_combiner_program *program)
 {
     program->input_mask = 0u;
     for (uint32_t cycle = 0; cycle < 2u; cycle++) {
-        const rdp_combiner_cycle *c = &program->cycle[cycle];
-        if (c->rgb_c == RDP_COMBINER_ZERO) {
-            program->input_mask |= source_mask((rdp_combiner_source)c->rgb_d);
-        } else {
-            program->input_mask |= source_mask((rdp_combiner_source)c->rgb_a) |
-                                   source_mask((rdp_combiner_source)c->rgb_b) |
-                                   source_mask((rdp_combiner_source)c->rgb_c) |
-                                   source_mask((rdp_combiner_source)c->rgb_d);
-        }
-        if (c->alpha_c == RDP_COMBINER_ZERO) {
-            program->input_mask |= source_mask((rdp_combiner_source)c->alpha_d);
-        } else {
-            program->input_mask |= source_mask((rdp_combiner_source)c->alpha_a) |
-                                   source_mask((rdp_combiner_source)c->alpha_b) |
-                                   source_mask((rdp_combiner_source)c->alpha_c) |
-                                   source_mask((rdp_combiner_source)c->alpha_d);
+        const uint8_t *sources = (const uint8_t *)&program->cycle[cycle];
+        for (uint32_t i = 0; i < sizeof(program->cycle[cycle]); i++) {
+            program->input_mask |= source_mask((rdp_combiner_source)sources[i]);
         }
     }
 }
@@ -236,8 +223,7 @@ rdp_color rdp_combiner_evaluate(const rdp_combiner_program *program,
 {
     if (!program || !inputs) return (rdp_color){0, 0, 0, 0};
     combiner_value combined = {0, 0, 0, 0};
-    if (cycle_type == RDP_CYCLE_2)
-        evaluate_cycle(&program->cycle[0], inputs, &combined);
+    if (cycle_type == RDP_CYCLE_2) evaluate_cycle(&program->cycle[0], inputs, &combined);
     evaluate_cycle(&program->cycle[1], inputs, &combined);
     return (rdp_color){ clamp_9(combined.r), clamp_9(combined.g), clamp_9(combined.b), clamp_9(combined.a) };
 }
@@ -332,11 +318,11 @@ static inline __m256i simd_clamp_9(__m256i value)
 }
 
 static inline void simd_cycle(const rdp_combiner_cycle *cycle,
-                              const rdp_color_pipeline_state *state,
-                              const rdp_fragment_block *packet,
-                              __m256i combined[4],
-                              uint32_t offset,
-                              bool second_cycle)
+                             const rdp_color_pipeline_state *state,
+                             const rdp_fragment_block *packet,
+                             __m256i combined[4],
+                             uint32_t offset,
+                             bool second_cycle)
 {
     __m256i combined_in[4];
     combined_in[0] = combined[0];
@@ -399,8 +385,7 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
         simd_combined[3] = _mm256_setzero_si256();
         
         if (state->two_cycle) {
-            simd_cycle(&state->program.cycle[0], state, packet,
-                       simd_combined, offset, false);
+            simd_cycle(&state->program.cycle[0], state, packet, simd_combined, offset, false);
             for (uint32_t component = 0; component < 4u; component++) {
                 store_pack_8(&combined[component][offset], simd_combined[component]);
             }
