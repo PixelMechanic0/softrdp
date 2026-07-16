@@ -5,11 +5,30 @@
 #include <stddef.h>
 #include <string.h>
 
-static uint8_t pipeline_combiner_cycle_mask(const rdp_combiner_cycle *cycle)
+static uint8_t pipeline_combiner_cycle_mask(const rdp_combiner_program *program,
+                                            uint32_t cycle_index)
 {
     uint8_t mask = 0u;
-    const uint8_t *sources = (const uint8_t *)cycle;
-    for (uint32_t i = 0; i < sizeof(*cycle); i++) {
+    const rdp_combiner_cycle *cycle = &program->cycle[cycle_index];
+    uint8_t sources[8];
+    uint32_t count = 0u;
+    if (cycle->rgb_c == RDP_COMBINER_ZERO) {
+        sources[count++] = cycle->rgb_d;
+    } else {
+        sources[count++] = cycle->rgb_a;
+        sources[count++] = cycle->rgb_b;
+        sources[count++] = cycle->rgb_c;
+        sources[count++] = cycle->rgb_d;
+    }
+    if (cycle->alpha_c == RDP_COMBINER_ZERO) {
+        sources[count++] = cycle->alpha_d;
+    } else {
+        sources[count++] = cycle->alpha_a;
+        sources[count++] = cycle->alpha_b;
+        sources[count++] = cycle->alpha_c;
+        sources[count++] = cycle->alpha_d;
+    }
+    for (uint32_t i = 0; i < count; i++) {
         switch ((rdp_combiner_source)sources[i]) {
         case RDP_COMBINER_TEXEL0_RGB:
         case RDP_COMBINER_TEXEL0_ALPHA: mask |= RDP_COMBINER_INPUT_TEXEL0; break;
@@ -178,9 +197,9 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->color.two_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2;
     primitive->color.primitive_lod_fraction = registers->primitive_lod_fraction;
     const uint8_t cycle1_inputs =
-        pipeline_combiner_cycle_mask(&registers->combiner.cycle[1]);
+        pipeline_combiner_cycle_mask(&registers->combiner, 1u);
     const uint8_t cycle0_inputs = primitive->color.two_cycle
-        ? pipeline_combiner_cycle_mask(&registers->combiner.cycle[0]) : 0u;
+        ? pipeline_combiner_cycle_mask(&registers->combiner, 0u) : 0u;
     const uint8_t active_combiner_inputs = cycle0_inputs | cycle1_inputs;
     /* Match ParallelRDP's two-cycle model: cycle 1 promotes the physical
      * tile-1 sample to TEXEL0 and aliases TEXEL1 back to physical TEXEL0. */

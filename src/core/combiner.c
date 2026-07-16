@@ -90,9 +90,22 @@ static void finish_program(rdp_combiner_program *program)
 {
     program->input_mask = 0u;
     for (uint32_t cycle = 0; cycle < 2u; cycle++) {
-        const uint8_t *sources = (const uint8_t *)&program->cycle[cycle];
-        for (uint32_t i = 0; i < sizeof(program->cycle[cycle]); i++) {
-            program->input_mask |= source_mask((rdp_combiner_source)sources[i]);
+        const rdp_combiner_cycle *c = &program->cycle[cycle];
+        if (c->rgb_c == RDP_COMBINER_ZERO) {
+            program->input_mask |= source_mask((rdp_combiner_source)c->rgb_d);
+        } else {
+            program->input_mask |= source_mask((rdp_combiner_source)c->rgb_a) |
+                                   source_mask((rdp_combiner_source)c->rgb_b) |
+                                   source_mask((rdp_combiner_source)c->rgb_c) |
+                                   source_mask((rdp_combiner_source)c->rgb_d);
+        }
+        if (c->alpha_c == RDP_COMBINER_ZERO) {
+            program->input_mask |= source_mask((rdp_combiner_source)c->alpha_d);
+        } else {
+            program->input_mask |= source_mask((rdp_combiner_source)c->alpha_a) |
+                                   source_mask((rdp_combiner_source)c->alpha_b) |
+                                   source_mask((rdp_combiner_source)c->alpha_c) |
+                                   source_mask((rdp_combiner_source)c->alpha_d);
         }
     }
 }
@@ -202,18 +215,30 @@ static void evaluate_cycle(const rdp_combiner_cycle *cycle,
 {
     combiner_value next;
     for (uint32_t component = 0; component < 3u; component++) {
-        const int32_t raw = rgb_equation(source_component((rdp_combiner_source)cycle->rgb_a, inputs, combined, component),
-                                         source_component((rdp_combiner_source)cycle->rgb_b, inputs, combined, component),
-                                         source_component((rdp_combiner_source)cycle->rgb_c, inputs, combined, component),
-                                         source_component((rdp_combiner_source)cycle->rgb_d, inputs, combined, component));
-        if (component == 0) next.r = (raw >> 8) & 0x1ff;
-        else if (component == 1) next.g = (raw >> 8) & 0x1ff;
-        else next.b = (raw >> 8) & 0x1ff;
+        int32_t value;
+        if (cycle->rgb_c == RDP_COMBINER_ZERO) {
+            value = source_component((rdp_combiner_source)cycle->rgb_d,
+                                     inputs, combined, component) & 0x1ff;
+        } else {
+            const int32_t raw = rgb_equation(
+                source_component((rdp_combiner_source)cycle->rgb_a, inputs, combined, component),
+                source_component((rdp_combiner_source)cycle->rgb_b, inputs, combined, component),
+                source_component((rdp_combiner_source)cycle->rgb_c, inputs, combined, component),
+                source_component((rdp_combiner_source)cycle->rgb_d, inputs, combined, component));
+            value = (raw >> 8) & 0x1ff;
+        }
+        if (component == 0) next.r = value;
+        else if (component == 1) next.g = value;
+        else next.b = value;
     }
-    next.a = alpha_equation(source_component((rdp_combiner_source)cycle->alpha_a, inputs, combined, 3u),
-                            source_component((rdp_combiner_source)cycle->alpha_b, inputs, combined, 3u),
-                            source_component((rdp_combiner_source)cycle->alpha_c, inputs, combined, 3u),
-                            source_component((rdp_combiner_source)cycle->alpha_d, inputs, combined, 3u));
+    next.a = cycle->alpha_c == RDP_COMBINER_ZERO
+        ? source_component((rdp_combiner_source)cycle->alpha_d,
+                           inputs, combined, 3u) & 0x1ff
+        : alpha_equation(
+            source_component((rdp_combiner_source)cycle->alpha_a, inputs, combined, 3u),
+            source_component((rdp_combiner_source)cycle->alpha_b, inputs, combined, 3u),
+            source_component((rdp_combiner_source)cycle->alpha_c, inputs, combined, 3u),
+            source_component((rdp_combiner_source)cycle->alpha_d, inputs, combined, 3u));
     *combined = next;
 }
 
@@ -223,7 +248,8 @@ rdp_color rdp_combiner_evaluate(const rdp_combiner_program *program,
 {
     if (!program || !inputs) return (rdp_color){0, 0, 0, 0};
     combiner_value combined = {0, 0, 0, 0};
-    if (cycle_type == RDP_CYCLE_2) evaluate_cycle(&program->cycle[0], inputs, &combined);
+    if (cycle_type == RDP_CYCLE_2)
+        evaluate_cycle(&program->cycle[0], inputs, &combined);
     evaluate_cycle(&program->cycle[1], inputs, &combined);
     return (rdp_color){ clamp_9(combined.r), clamp_9(combined.g), clamp_9(combined.b), clamp_9(combined.a) };
 }
@@ -317,40 +343,64 @@ static inline __m256i simd_clamp_9(__m256i value)
     return _mm256_blendv_epi8(res, _mm256_setzero_si256(), is_3);
 }
 
-static inline void simd_cycle(const rdp_combiner_cycle *cycle,
-                             const rdp_color_pipeline_state *state,
-                             const rdp_fragment_block *packet,
-                             __m256i combined[4],
-                             uint32_t offset,
-                             bool second_cycle)
+static inline __m256i simd_generic_equation(uint32_t a_source,
+                                            uint32_t b_source,
+                                            uint32_t c_source,
+                                            uint32_t d_source,
+                                            const rdp_color_pipeline_state *state,
+                                            const rdp_fragment_block *packet,
+                                            const __m256i combined_in[4],
+                                            uint32_t component,
+                                            uint32_t offset,
+                                            bool second_cycle)
 {
-    __m256i combined_in[4];
-    combined_in[0] = combined[0];
-    combined_in[1] = combined[1];
-    combined_in[2] = combined[2];
-    combined_in[3] = combined[3];
+    __m256i a = simde_extend_9(simd_load_source(a_source, packet, combined_in,
+                                                state, component, offset, second_cycle));
+    __m256i b = simde_extend_9(simd_load_source(b_source, packet, combined_in,
+                                                state, component, offset, second_cycle));
+    __m256i c = simde_extend_9(simd_load_source(c_source, packet, combined_in,
+                                                state, component, offset, second_cycle));
+    __m256i d = simde_extend_9(simd_load_source(d_source, packet, combined_in,
+                                                state, component, offset, second_cycle));
+    __m256i sum = _mm256_add_epi32(
+        _mm256_mullo_epi32(_mm256_sub_epi32(a, b), c),
+        _mm256_slli_epi32(d, 8));
+    sum = _mm256_add_epi32(sum, _mm256_set1_epi32(0x80));
+    return _mm256_and_si256(_mm256_srai_epi32(sum, 8),
+                            _mm256_set1_epi32(0x1ff));
+}
 
-    for (uint32_t component = 0; component < 4u; component++) {
-        const bool alpha = component == 3u;
-        __m256i a = simd_load_source(alpha ? cycle->alpha_a : cycle->rgb_a, packet, combined_in, state, component, offset, second_cycle);
-        __m256i b = simd_load_source(alpha ? cycle->alpha_b : cycle->rgb_b, packet, combined_in, state, component, offset, second_cycle);
-        __m256i c = simd_load_source(alpha ? cycle->alpha_c : cycle->rgb_c, packet, combined_in, state, component, offset, second_cycle);
-        __m256i d = simd_load_source(alpha ? cycle->alpha_d : cycle->rgb_d, packet, combined_in, state, component, offset, second_cycle);
-        
-        a = simde_extend_9(a);
-        b = simde_extend_9(b);
-        c = simde_extend_9(c);
-        d = simde_extend_9(d);
-        
-        __m256i diff = _mm256_sub_epi32(a, b);
-        __m256i prod = _mm256_mullo_epi32(diff, c);
-        __m256i d_scaled = _mm256_slli_epi32(d, 8);
-        __m256i sum = _mm256_add_epi32(prod, d_scaled);
-        sum = _mm256_add_epi32(sum, _mm256_set1_epi32(0x80));
-        
-        __m256i shifted = _mm256_srai_epi32(sum, 8);
-        combined[component] = _mm256_and_si256(shifted, _mm256_set1_epi32(0x1ff));
+static inline void simd_cycle(const rdp_combiner_cycle *cycle,
+                              const rdp_color_pipeline_state *state,
+                              const rdp_fragment_block *packet,
+                              __m256i combined[4],
+                              uint32_t offset,
+                              bool second_cycle)
+{
+    const __m256i combined_in[4] = {
+        combined[0], combined[1], combined[2], combined[3]
+    };
+    const __m256i mask_9 = _mm256_set1_epi32(0x1ff);
+
+    if (cycle->rgb_c == RDP_COMBINER_ZERO) {
+        for (uint32_t component = 0; component < 3u; component++)
+            combined[component] = _mm256_and_si256(
+                simd_load_source(cycle->rgb_d, packet, combined_in, state,
+                                 component, offset, second_cycle), mask_9);
+    } else {
+        for (uint32_t component = 0; component < 3u; component++)
+            combined[component] = simd_generic_equation(
+                cycle->rgb_a, cycle->rgb_b, cycle->rgb_c, cycle->rgb_d,
+                state, packet, combined_in, component, offset, second_cycle);
     }
+
+    combined[3] = cycle->alpha_c == RDP_COMBINER_ZERO
+        ? _mm256_and_si256(
+            simd_load_source(cycle->alpha_d, packet, combined_in, state,
+                             3u, offset, second_cycle), mask_9)
+        : simd_generic_equation(
+            cycle->alpha_a, cycle->alpha_b, cycle->alpha_c, cycle->alpha_d,
+            state, packet, combined_in, 3u, offset, second_cycle);
 }
 
 void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
@@ -385,7 +435,8 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
         simd_combined[3] = _mm256_setzero_si256();
         
         if (state->two_cycle) {
-            simd_cycle(&state->program.cycle[0], state, packet, simd_combined, offset, false);
+            simd_cycle(&state->program.cycle[0], state, packet,
+                       simd_combined, offset, false);
             for (uint32_t component = 0; component < 4u; component++) {
                 store_pack_8(&combined[component][offset], simd_combined[component]);
             }
