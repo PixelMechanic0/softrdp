@@ -276,7 +276,6 @@ EXPORT int CALL RomOpen(void)
         rdram_size = *g_gfx.RDRAM_SIZE;
     }
     host.rdram_size = rdram_size;
-    host.rdram_bswapped = true;
     host.dmem = g_gfx.DMEM;
     host.mi_intr_reg = (uint32_t *)g_gfx.MI_INTR_REG;
     host.raise_mi_interrupt = raise_mi_interrupt;

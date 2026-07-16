@@ -132,17 +132,10 @@ static bool read_command_word(const sr_context *ctx, bool xbus_dma, uint32_t wor
             return false;
         }
 
-        if (ctx->memory.rdram_bswapped) {
-            *word = ((uint32_t)dmem[byte_addr ^ 3u] << 24) |
-                    ((uint32_t)dmem[(byte_addr + 1u) ^ 3u] << 16) |
-                    ((uint32_t)dmem[(byte_addr + 2u) ^ 3u] << 8) |
-                    ((uint32_t)dmem[(byte_addr + 3u) ^ 3u]);
-        } else {
-            *word = ((uint32_t)dmem[byte_addr] << 24) |
-                    ((uint32_t)dmem[byte_addr + 1u] << 16) |
-                    ((uint32_t)dmem[byte_addr + 2u] << 8) |
-                    ((uint32_t)dmem[byte_addr + 3u]);
-        }
+        *word = ((uint32_t)dmem[byte_addr ^ 3u] << 24) |
+                ((uint32_t)dmem[(byte_addr + 1u) ^ 3u] << 16) |
+                ((uint32_t)dmem[(byte_addr + 2u) ^ 3u] << 8) |
+                ((uint32_t)dmem[(byte_addr + 3u) ^ 3u]);
         return true;
     }
 

@@ -297,7 +297,6 @@ static sr_host_interface make_host_interface(GFX_INFO *gfx)
     }
 #endif
     host.rdram_size = g_rdram_size;
-    host.rdram_bswapped = gfx->MemoryBswaped != 0;
     host.dmem = gfx->DMEM;
     host.mi_intr_reg = reg32(gfx->MI_INTR_REG);
     host.raise_mi_interrupt = raise_mi_interrupt;
@@ -371,6 +370,15 @@ static bool start_runtime(void)
                       g_gfx.MemoryBswaped ? 1 : 0,
                       (void *)g_gfx.RDRAM,
                       (void *)g_gfx.DMEM);
+
+    if (!g_gfx.MemoryBswaped) {
+        pj64_log_printf("start_runtime: host did not provide word-swapped RDRAM");
+        MessageBoxA(g_gfx.hWnd,
+                    "SoftRDP requires word-swapped RDRAM from the emulator.",
+                    "SoftRDP",
+                    MB_ICONERROR | MB_OK);
+        return false;
+    }
 
     host = make_host_interface(&g_gfx);
     sr_destroy(g_context);

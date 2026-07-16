@@ -1,13 +1,5 @@
 #include "framebuffer.h"
 
-static inline uint32_t byte_swap32(uint32_t value)
-{
-    return ((value & 0x000000ffu) << 24) |
-           ((value & 0x0000ff00u) << 8) |
-           ((value & 0x00ff0000u) >> 8) |
-           ((value & 0xff000000u) >> 24);
-}
-
 /* The destination is 32-bit aligned before entering this loop. Keeping the
  * loop as one restrict-qualified repeated store lets the compiler vectorize
  * it without understanding RDRAM byte swapping or pixel formats. */
@@ -23,8 +15,7 @@ static bool fill_rect_8(sr_memory *memory, const rdp_framebuffer_state *state,
 {
     const uint32_t width = state->color_image.width;
     const uint32_t count = x1 - x0 + 1u;
-    const uint32_t stored_word = memory->rdram_bswapped ? state->fill_color
-                                                        : byte_swap32(state->fill_color);
+    const uint32_t stored_word = state->fill_color;
     for (uint32_t y = y0; y <= y1; y++) {
         uint32_t address = state->color_image.address + y * width + x0;
         uint32_t remaining = count;
@@ -70,7 +61,6 @@ static bool fill_rect_16(sr_memory *memory, const rdp_framebuffer_state *state,
         uint32_t pair = (pixel & 1u) ?
                         (state->fill_color << 16) | (state->fill_color >> 16) :
                         state->fill_color;
-        if (!memory->rdram_bswapped) pair = byte_swap32(pair);
         const uint32_t words = remaining >> 1;
         fill_repeated_words(memory->rdram, address, pair, words);
         pixel += words * 2u;
@@ -90,8 +80,7 @@ static bool fill_rect_32(sr_memory *memory, const rdp_framebuffer_state *state,
 {
     const uint32_t width = state->color_image.width;
     const uint32_t count = x1 - x0 + 1u;
-    const uint32_t stored_word = memory->rdram_bswapped ? state->fill_color
-                                                        : byte_swap32(state->fill_color);
+    const uint32_t stored_word = state->fill_color;
     for (uint32_t y = y0; y <= y1; y++) {
         const uint32_t address = state->color_image.address +
                                  (y * width + x0) * 4u;
