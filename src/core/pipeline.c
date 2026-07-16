@@ -597,6 +597,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
             continue;
         }
 
+        if (block.active_mask == 0u) continue;
+
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
             for (uint32_t lane = 0; lane < count; lane++) {
                 rdp_span_work lane_work = {
@@ -620,6 +622,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 }
             }
         }
+
+        if (block.active_mask == 0u) continue;
 
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
             const bool uses_lod = (primitive->block_plan.stages & RDP_BLOCK_STAGE_LOD) != 0u;
@@ -692,6 +696,8 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 }
             }
         }
+
+        if (block.active_mask == 0u) continue;
 
         rdp_combiner_evaluate_packet(color_pipeline, &block);
         for (uint32_t lane = 0; lane < count; lane++) {
@@ -778,6 +784,8 @@ static sr_result pipeline_render_rectangle_span_specialized(
                     store_texel(packet.texel0, lane, texel1);
             }
         }
+        if (live_mask == 0u) continue;
+
         if (primitive->block_plan.stages & RDP_BLOCK_STAGE_DEPTH) {
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
@@ -797,6 +805,8 @@ static sr_result pipeline_render_rectangle_span_specialized(
                 if (!depth_results[lane].pass) live_mask &= (uint16_t)~bit;
             }
         }
+        if (live_mask == 0u) continue;
+
         rdp_combiner_evaluate_packet(color, &packet);
         packet.active_mask = live_mask;
         packet.y = (uint32_t)work->y;
