@@ -379,10 +379,8 @@ static inline sr_result scalar_depth_test(sr_memory *memory,
         new_depth = overflow < 2u ? scaled & 0x3ffffu :
                     overflow == 2u ? 0x3ffffu : 0u;
     }
-    if ((depth->compare || depth->update) &&
-        !sr_memory_read_be16(memory, addr, &old_stored)) {
-        return SR_ERROR_INVALID_ARGUMENT;
-    }
+    if (depth->compare || depth->update)
+        old_stored = sr_memory_read_be16_fast(memory, addr);
     if (depth->compare) {
         const uint32_t old_depth = rdp_depth_decompress(old_stored);
         const bool maximum = old_depth == 0x3ffffu;
@@ -434,12 +432,12 @@ static inline sr_result commit_depth_update(sr_memory *memory,
     if (!fragment_accepted) {
         return SR_OK;
     }
-    if (!sr_memory_write_be16(memory, depth->address, depth->compressed))
-        return SR_ERROR_INVALID_ARGUMENT;
+    sr_memory_write_be16_fast(memory, depth->address, depth->compressed);
     return SR_OK;
 }
 
-static void setup_triangle_full_block(const rdp_primitive_state *primitive,
+static void setup_triangle_full_block(sr_memory *memory,
+                                      const rdp_primitive_state *primitive,
                                       rdp_span_work *cursor,
                                       uint32_t count,
                                       rdp_fragment_block *block)
@@ -466,7 +464,8 @@ static void setup_triangle_full_block(const rdp_primitive_state *primitive,
     const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
     for (uint32_t lane = 0; lane < count; lane++) {
         block->x[lane] = cursor->x_begin + (int)lane;
-        block->color_address[lane] = first_color_address + lane * primitive->framebuffer.bytes_per_pixel;
+        block->color_address[lane] = mask_addr(memory,
+            first_color_address + lane * primitive->framebuffer.bytes_per_pixel);
         /* Keep depth at the pixel center. Moving neighboring polygons to
          * different coverage centroids creates unstable seam comparisons. */
         block->depth_fixed[lane] = cursor->depth_fixed +
@@ -502,13 +501,14 @@ static void setup_triangle_full_block(const rdp_primitive_state *primitive,
     cursor->x_begin += (int)count;
 }
 
-static void setup_triangle_edge_block(const rdp_primitive_state *primitive,
+static void setup_triangle_edge_block(sr_memory *memory,
+                                      const rdp_primitive_state *primitive,
                                       rdp_span_work *cursor,
                                       uint32_t count,
                                       rdp_fragment_block *block)
 {
     const rdp_span_work start = *cursor;
-    setup_triangle_full_block(primitive, cursor, count, block);
+    setup_triangle_full_block(memory, primitive, cursor, count, block);
 
     const raster_decoded_triangle *decoded = &primitive->triangle;
     const int32_t shade_dx[4] = {
@@ -581,9 +581,9 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
         const bool full_packet = cursor.x_begin >= cursor.coverage.full_x0 &&
                                  packet_x1 <= cursor.coverage.full_x1;
         if (full_packet) {
-            setup_triangle_full_block(primitive, &cursor, count, &block);
+            setup_triangle_full_block(memory, primitive, &cursor, count, &block);
         } else {
-            setup_triangle_edge_block(primitive, &cursor, count, &block);
+            setup_triangle_edge_block(memory, primitive, &cursor, count, &block);
         }
         processed += (int)count;
 
@@ -604,8 +604,10 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                     .depth_fixed = block.depth_fixed[lane]
                 };
                 rdp_depth_result depth;
-                const uint32_t depth_address = primitive->fragment.depth.image_address +
-                    ((uint32_t)work->y * primitive->framebuffer.color_image.width + block.x[0]) * 2u + lane * 2u;
+                const uint32_t depth_address = mask_addr(memory,
+                    primitive->fragment.depth.image_address +
+                    ((uint32_t)work->y * primitive->framebuffer.color_image.width +
+                     block.x[0]) * 2u + lane * 2u);
                 const sr_result result = scalar_depth_test(memory, primitive,
                     &lane_work, depth_address, block.color_address[lane],
                     block.coverage[lane], &depth);
@@ -783,13 +785,13 @@ static sr_result pipeline_render_rectangle_span_specialized(
                 const uint32_t x = (uint32_t)work->x_begin + offset + lane;
                 const uint32_t pixel = (uint32_t)work->y *
                     primitive->framebuffer.color_image.width + x;
-                const uint32_t depth_address = primitive->fragment.depth.image_address +
-                    pixel * 2u;
+                const uint32_t depth_address = mask_addr(memory,
+                    primitive->fragment.depth.image_address + pixel * 2u);
                 const rdp_span_work lane_work = { .y = work->y };
                 const sr_result depth_result = scalar_depth_test(memory, primitive,
                     &lane_work, depth_address,
-                    primitive->framebuffer.color_image.address +
-                        pixel * primitive->framebuffer.bytes_per_pixel,
+                    mask_addr(memory, primitive->framebuffer.color_image.address +
+                        pixel * primitive->framebuffer.bytes_per_pixel),
                     8u, &depth_results[lane]);
                 if (depth_result != SR_OK) return depth_result;
                 if (!depth_results[lane].pass) live_mask &= (uint16_t)~bit;
@@ -804,7 +806,8 @@ static sr_result pipeline_render_rectangle_span_specialized(
                                        first_pixel * primitive->framebuffer.bytes_per_pixel;
         for (uint32_t lane = 0; lane < count; lane++) {
             packet.x[lane] = (uint32_t)work->x_begin + offset + lane;
-            packet.color_address[lane] = first_address + lane * primitive->framebuffer.bytes_per_pixel;
+            packet.color_address[lane] = mask_addr(memory,
+                first_address + lane * primitive->framebuffer.bytes_per_pixel);
         }
         const sr_result result = fragment_finish_packet(memory, primitive, &packet);
         if (result != SR_OK) return result;

@@ -20,12 +20,10 @@ static inline sr_result framebuffer_read_memory_address(sr_memory *memory,
     pixel->coverage = 7u;
     if (!image_read) return SR_OK;
     if (size == RDP_SIZE_8BPP) {
-        uint8_t value;
-        if (!sr_memory_read_u8(memory, address, &value)) return SR_ERROR_INVALID_ARGUMENT;
+        const uint8_t value = sr_memory_read_u8_fast(memory, address);
         pixel->color = (rdp_color){value, value, value, 0xe0u};
     } else if (size == RDP_SIZE_16BPP) {
-        uint16_t value;
-        if (!sr_memory_read_be16(memory, address, &value)) return SR_ERROR_INVALID_ARGUMENT;
+        const uint16_t value = sr_memory_read_be16_fast(memory, address);
         /* The blender sees the stored five color bits in the high bits of
          * each channel; unlike texture decode, framebuffer read does not
          * replicate them into the low three bits. */
@@ -36,8 +34,7 @@ static inline sr_result framebuffer_read_memory_address(sr_memory *memory,
             (value & 1u) ? 0xe0u : 0u
         };
     } else if (size == RDP_SIZE_32BPP) {
-        uint32_t value;
-        if (!sr_memory_read_be32(memory, address, &value)) return SR_ERROR_INVALID_ARGUMENT;
+        const uint32_t value = sr_memory_read_be32_fast(memory, address);
         pixel->color = (rdp_color){(uint8_t)(value >> 24), (uint8_t)(value >> 16),
                                    (uint8_t)(value >> 8), (uint8_t)value & 0xe0u};
     } else return SR_ERROR_UNSUPPORTED;
@@ -53,14 +50,17 @@ static inline sr_result framebuffer_write_color_address(sr_memory *memory,
 {
     switch (size) {
     case RDP_SIZE_8BPP:
-        return sr_memory_write_u8(memory, address, (pixel_index & 1u) ? color.g : color.r)
-            ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+        sr_memory_write_u8_fast(memory, address,
+                                (pixel_index & 1u) ? color.g : color.r);
+        return SR_OK;
     case RDP_SIZE_16BPP:
-        return sr_memory_write_be16(memory, address, pipeline_color_to_rgba5551(color))
-            ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+        sr_memory_write_be16_fast(memory, address,
+                                  pipeline_color_to_rgba5551(color));
+        return SR_OK;
     case RDP_SIZE_32BPP:
-        return sr_memory_write_be32(memory, address, pipeline_color_to_rgba8888(color))
-            ? SR_OK : SR_ERROR_INVALID_ARGUMENT;
+        sr_memory_write_be32_fast(memory, address,
+                                  pipeline_color_to_rgba8888(color));
+        return SR_OK;
     default: return SR_ERROR_UNSUPPORTED;
     }
 }

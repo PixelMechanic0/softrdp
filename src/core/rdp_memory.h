@@ -98,4 +98,42 @@ static inline bool sr_memory_write_be32(sr_memory *mem, uint32_t addr, uint32_t 
     return true;
 }
 
+/* For addresses already wrapped by mask_addr() during packet setup. */
+static inline uint8_t sr_memory_read_u8_fast(const sr_memory *mem, uint32_t addr)
+{
+    return mem->rdram[rdram_byte_index(mem, addr)];
+}
+
+static inline uint16_t sr_memory_read_be16_fast(const sr_memory *mem, uint32_t addr)
+{
+    if (mem->rdram_bswapped)
+        return (uint16_t)(*(const uint32_t *)&mem->rdram[addr & ~3u] >>
+                          (((addr & 2u) ^ 2u) * 8u));
+    return bswap16(*(const uint16_t *)(const void *)&mem->rdram[addr]);
+}
+
+static inline uint32_t sr_memory_read_be32_fast(const sr_memory *mem, uint32_t addr)
+{
+    const uint32_t value = *(const uint32_t *)&mem->rdram[addr];
+    return mem->rdram_bswapped ? value : bswap32(value);
+}
+
+static inline void sr_memory_write_u8_fast(sr_memory *mem, uint32_t addr, uint8_t value)
+{
+    mem->rdram[rdram_byte_index(mem, addr)] = value;
+}
+
+static inline void sr_memory_write_be16_fast(sr_memory *mem, uint32_t addr, uint16_t value)
+{
+    if (mem->rdram_bswapped)
+        *(uint16_t *)&mem->rdram[addr ^ 2u] = value;
+    else
+        *(uint16_t *)&mem->rdram[addr] = bswap16(value);
+}
+
+static inline void sr_memory_write_be32_fast(sr_memory *mem, uint32_t addr, uint32_t value)
+{
+    *(uint32_t *)&mem->rdram[addr] = mem->rdram_bswapped ? value : bswap32(value);
+}
+
 #endif
