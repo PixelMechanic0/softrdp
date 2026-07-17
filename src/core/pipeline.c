@@ -221,6 +221,21 @@ static void store_texel(uint16_t destination[4][RDP_PACKET_LANES],
     destination[3][lane] = texel.a;
 }
 
+/*
+ * True when `sample` would reach the compact bilinear path inside
+ * tmem_sample_color_fixed5, i.e. it can be sampled by the batched
+ * tmem_sample_compact_bilerp_block with identical results. The width/height/
+ * stride and tile_index guards mirror the branch conditions in
+ * tmem_sample_color_fixed5 so the batched path never diverges from scalar.
+ */
+static inline bool sampler_batchable_compact(const rdp_texture_sample_state *s)
+{
+    const rdp_sampler_class sc = s->sampler_class;
+    return s->tile_index < 8u && s->width && s->height && s->stride &&
+           (sc == RDP_SAMPLER_I4_BILERP || sc == RDP_SAMPLER_CI8_TLUT_BILERP ||
+            sc == RDP_SAMPLER_I8_BILERP || sc == RDP_SAMPLER_IA8_BILERP);
+}
+
 template <rdp_block_sampler_kind Sampler>
 static inline bool sample_compiled_texture(const tmem_state *tmem,
                                            const rdp_texture_sample_state *sample,
@@ -259,13 +274,27 @@ static void sample_triangle_texture_block(
             const uint16_t ok = tmem_sample_rgba16_bilerp_block(
                 tmem, &primitive->texture, block->sample_s, block->sample_t,
                 block->active_mask, count, texels);
+            /* Batch the second-cycle texel too when it is a compact format. */
+            rdp_color texels1[RDP_PACKET_LANES];
+            uint16_t ok1_mask = 0;
+            const bool texel1_batched = color->needs_texel1 &&
+                sampler_batchable_compact(&primitive->texture_cycle1);
+            if (texel1_batched)
+                ok1_mask = tmem_sample_compact_bilerp_block(
+                    tmem, &primitive->texture_cycle1, block->sample_s,
+                    block->sample_t, block->active_mask, count, texels1);
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
                 if (!(block->active_mask & bit)) continue;
                 rdp_color texel1;
-                const bool ok1 = !color->needs_texel1 ||
-                    tmem_sample_color_fixed5(tmem, &primitive->texture_cycle1,
-                        block->sample_s[lane], block->sample_t[lane], &texel1);
+                bool ok1 = true;
+                if (color->needs_texel1) {
+                    if (texel1_batched) ok1 = (ok1_mask & bit) != 0u;
+                    else ok1 = tmem_sample_color_fixed5(tmem,
+                        &primitive->texture_cycle1, block->sample_s[lane],
+                        block->sample_t[lane], &texel1);
+                    if (ok1 && texel1_batched) texel1 = texels1[lane];
+                }
                 if ((ok & bit) && ok1) {
                     store_texel(block->texel0, lane, texels[lane]);
                     if (color->needs_texel1)
@@ -830,6 +859,15 @@ static sr_result pipeline_render_rectangle_span_specialized(
                     const uint16_t ok = tmem_sample_rgba16_bilerp_block(
                         primitive->tmem, &primitive->texture, s_arr, t_arr,
                         live_mask, count, texels);
+                    /* Batch the second-cycle texel too when it is compact. */
+                    rdp_color texels1[RDP_PACKET_LANES];
+                    uint16_t ok1_mask = 0;
+                    const bool texel1_batched = color->needs_texel1 &&
+                        sampler_batchable_compact(&primitive->texture_cycle1);
+                    if (texel1_batched)
+                        ok1_mask = tmem_sample_compact_bilerp_block(
+                            primitive->tmem, &primitive->texture_cycle1, s_arr,
+                            t_arr, live_mask, count, texels1);
                     for (uint32_t lane = 0; lane < count; lane++) {
                         const uint16_t bit = (uint16_t)(1u << lane);
                         if (!(live_mask & bit)) continue;
@@ -838,12 +876,17 @@ static sr_result pipeline_render_rectangle_span_specialized(
                             continue;
                         }
                         rdp_color texel1;
-                        if (color->needs_texel1 &&
-                            !tmem_sample_color_fixed5(primitive->tmem,
+                        if (color->needs_texel1) {
+                            bool ok1;
+                            if (texel1_batched) ok1 = (ok1_mask & bit) != 0u;
+                            else ok1 = tmem_sample_color_fixed5(primitive->tmem,
                                 &primitive->texture_cycle1, s_arr[lane], t_arr[lane],
-                                &texel1)) {
-                            live_mask &= (uint16_t)~bit;
-                            continue;
+                                &texel1);
+                            if (!ok1) {
+                                live_mask &= (uint16_t)~bit;
+                                continue;
+                            }
+                            if (texel1_batched) texel1 = texels1[lane];
                         }
                         store_texel(packet.texel0, lane, texels[lane]);
                         if (color->needs_texel1)

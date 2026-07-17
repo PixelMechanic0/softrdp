@@ -995,6 +995,192 @@ static inline uint16_t tmem_sample_rgba16_bilerp_block(
     return ok_mask;
 }
 
+/*
+ * Decodes one compact (4bpp/8bpp) texel from a resolved TMEM byte address,
+ * matching the decode half of tmem_fetch_compact_local. Returns false only for
+ * a CI8 palette entry that lands past the end of TMEM.
+ */
+static inline bool tmem_compact_decode_texel(const tmem_state *tmem,
+                                             uint32_t byte, uint8_t subtexel,
+                                             rdp_sampler_class sampler_class,
+                                             bool tlut_ia, rdp_color *color)
+{
+    if (sampler_class == RDP_SAMPLER_I4_BILERP) {
+        const uint8_t packed = tmem->bytes[byte];
+        const uint8_t intensity = expand_4_to_8(
+            subtexel ? (packed & 0xfu) : (packed >> 4));
+        *color = (rdp_color){ intensity, intensity, intensity, intensity };
+        return true;
+    }
+    if (sampler_class == RDP_SAMPLER_I8_BILERP) {
+        const uint8_t intensity = tmem->bytes[byte];
+        *color = (rdp_color){ intensity, intensity, intensity, intensity };
+        return true;
+    }
+    if (sampler_class == RDP_SAMPLER_IA8_BILERP) {
+        const uint8_t texel = tmem->bytes[byte];
+        const uint8_t intensity = expand_4_to_8(texel >> 4);
+        const uint8_t alpha = expand_4_to_8(texel);
+        *color = (rdp_color){ intensity, intensity, intensity, alpha };
+        return true;
+    }
+    const uint32_t palette_addr = 0x800u + (uint32_t)tmem->bytes[byte] * 8u;
+    if (palette_addr + 1u >= SR_TMEM_SIZE) return false;
+    const uint16_t entry = ((uint16_t)tmem->bytes[palette_addr] << 8) |
+                           (uint16_t)tmem->bytes[palette_addr + 1u];
+    if (tlut_ia) {
+        const uint8_t intensity = (uint8_t)(entry >> 8);
+        *color = (rdp_color){ intensity, intensity, intensity, (uint8_t)entry };
+    } else {
+        *color = tmem_rgba16_decode_table[entry];
+    }
+    return true;
+}
+
+/*
+ * Batched compact (I4 / I8 / IA8 / CI8-TLUT) bilinear sampler. Same
+ * invariant-hoisting rationale as tmem_sample_rgba16_bilerp_block; only the
+ * texel fetch differs (4bpp/8bpp address resolution plus format-specific
+ * decode inlined from tmem_fetch_compact_local). Semantically identical to a
+ * per-lane tmem_sample_compact_bilerp_fixed5.
+ */
+static inline uint16_t tmem_sample_compact_bilerp_block(
+    const tmem_state *tmem,
+    const rdp_texture_sample_state *sample,
+    const int32_t *s_fixed,
+    const int32_t *t_fixed,
+    uint16_t lanes,
+    uint32_t count,
+    rdp_color *out)
+{
+    if (!sample->width || !sample->height || !sample->stride) {
+        return 0;
+    }
+
+    const rdp_tile *tile = &sample->tile;
+    const uint8_t shift_s = tile->shift_s;
+    const uint8_t shift_t = tile->shift_t;
+    const int32_t origin_s = (int32_t)tile->sl << 3;
+    const int32_t origin_t = (int32_t)tile->tl << 3;
+    const int32_t hi_s = sample->bounds.sh >= sample->bounds.sl
+        ? (int32_t)(sample->bounds.sh - sample->bounds.sl) : 0;
+    const int32_t hi_t = sample->bounds.th >= sample->bounds.tl
+        ? (int32_t)(sample->bounds.th - sample->bounds.tl) : 0;
+    const uint32_t extent_s = sample->width;
+    const uint32_t extent_t = sample->height;
+    const uint8_t mask_s = tile->mask_s;
+    const uint8_t mask_t = tile->mask_t;
+    const bool clamp_s = tile->clamp_s != 0 || tile->mask_s == 0;
+    const bool clamp_t = tile->clamp_t != 0 || tile->mask_t == 0;
+    const bool mirror_s = tile->mirror_s != 0;
+    const bool mirror_t = tile->mirror_t != 0;
+    const uint32_t tmem_base = tile->tmem;
+    const uint32_t stride = sample->stride;
+    const bool mid_texel = sample->mid_texel;
+    const rdp_sampler_class sampler_class = sample->sampler_class;
+    const bool tlut_ia = sample->tlut_ia;
+    const bool is_4bpp = tile->size == RDP_SIZE_4BPP;
+    const bool valid_size = tile->size == RDP_SIZE_4BPP || tile->size == RDP_SIZE_8BPP;
+
+    uint16_t ok_mask = 0;
+    for (uint32_t lane = 0; lane < count; lane++) {
+        const uint16_t bit = (uint16_t)(1u << lane);
+        if (!(lanes & bit)) continue;
+
+        const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed[lane], shift_s);
+        const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed[lane], shift_t);
+        const int32_t shifted_s1 = shift_tile_coord_fixed5(s_fixed[lane] + 32, shift_s);
+        const int32_t shifted_t1 = shift_tile_coord_fixed5(t_fixed[lane] + 32, shift_t);
+        uint32_t s0, s1, t0, t1;
+        if (!resolve_tile_axis(fixed5_floor_to_texel(shifted_s - origin_s), 0,
+                               hi_s, extent_s, clamp_s, mirror_s, mask_s, &s0) ||
+            !resolve_tile_axis(fixed5_floor_to_texel(shifted_s1 - origin_s), 0,
+                               hi_s, extent_s, clamp_s, mirror_s, mask_s, &s1) ||
+            !resolve_tile_axis(fixed5_floor_to_texel(shifted_t - origin_t), 0,
+                               hi_t, extent_t, clamp_t, mirror_t, mask_t, &t0) ||
+            !resolve_tile_axis(fixed5_floor_to_texel(shifted_t1 - origin_t), 0,
+                               hi_t, extent_t, clamp_t, mirror_t, mask_t, &t1)) {
+            continue;
+        }
+
+        const uint32_t frac_s = (uint32_t)(shifted_s - origin_s) & 31u;
+        const uint32_t frac_t = (uint32_t)(shifted_t - origin_t) & 31u;
+
+        /* Inlined compact texel fetch: 4bpp/8bpp address -> format decode. */
+        #define TMEM_COMPACT_TAP(dst, ls, lt)                                     \
+            do {                                                                  \
+                if (!valid_size) goto lane_fallback;                              \
+                const uint32_t rxor = ((lt) & 1u) ? 4u : 0u;                      \
+                uint32_t byte;                                                    \
+                uint8_t subtexel;                                                 \
+                if (is_4bpp) {                                                    \
+                    byte = (tmem_base + (lt) * stride + (((ls) >> 1) ^ rxor)) ^ 2u;\
+                    subtexel = (uint8_t)((ls) & 1u);                              \
+                } else {                                                          \
+                    byte = (tmem_base + (lt) * stride + ((ls) ^ rxor)) ^ 2u;      \
+                    subtexel = 0u;                                                \
+                }                                                                 \
+                if (byte >= SR_TMEM_SIZE) goto lane_fallback;                     \
+                if (!tmem_compact_decode_texel(tmem, byte, subtexel,             \
+                        sampler_class, tlut_ia, &(dst))) goto lane_fallback;      \
+            } while (0)
+
+        rdp_color result;
+        if (mid_texel && frac_s == 16u && frac_t == 16u) {
+            rdp_color c00, c10, c01, c11;
+            TMEM_COMPACT_TAP(c00, s0, t0);
+            TMEM_COMPACT_TAP(c10, s1, t0);
+            TMEM_COMPACT_TAP(c01, s0, t1);
+            TMEM_COMPACT_TAP(c11, s1, t1);
+            result = (rdp_color){
+                (uint8_t)(((uint32_t)c00.r + c10.r + c01.r + c11.r + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.g + c10.g + c01.g + c11.g + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.b + c10.b + c01.b + c11.b + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.a + c10.a + c01.a + c11.a + 2u) >> 2)
+            };
+        } else if (frac_s + frac_t >= 32u) {
+            rdp_color c11, c10, c01;
+            TMEM_COMPACT_TAP(c11, s1, t1);
+            TMEM_COMPACT_TAP(c10, s1, t0);
+            TMEM_COMPACT_TAP(c01, s0, t1);
+            result = bilerp_3tap_color(c11, c10, c01, 32u - frac_t, 32u - frac_s);
+        } else {
+            rdp_color c00, c10, c01;
+            TMEM_COMPACT_TAP(c00, s0, t0);
+            TMEM_COMPACT_TAP(c10, s1, t0);
+            TMEM_COMPACT_TAP(c01, s0, t1);
+            result = bilerp_3tap_color(c00, c10, c01, frac_s, frac_t);
+        }
+        out[lane] = result;
+        ok_mask |= bit;
+        continue;
+
+    lane_fallback:
+        /* Tail fallback to the base texel, matching the scalar path's return. */
+        {
+            if (!valid_size) continue;
+            const uint32_t rxor = (t0 & 1u) ? 4u : 0u;
+            uint32_t byte;
+            uint8_t subtexel;
+            if (is_4bpp) {
+                byte = (tmem_base + t0 * stride + ((s0 >> 1) ^ rxor)) ^ 2u;
+                subtexel = (uint8_t)(s0 & 1u);
+            } else {
+                byte = (tmem_base + t0 * stride + (s0 ^ rxor)) ^ 2u;
+                subtexel = 0u;
+            }
+            if (byte >= SR_TMEM_SIZE) continue;
+            rdp_color result;
+            if (!tmem_compact_decode_texel(tmem, byte, subtexel, sampler_class,
+                                           tlut_ia, &result)) continue;
+            out[lane] = result;
+            ok_mask |= bit;
+        }
+        #undef TMEM_COMPACT_TAP
+    }
+    return ok_mask;
+}
+
 static inline bool tmem_sample_bilerp_compiled_fixed5(const tmem_state *tmem,
                                                        const rdp_texture_sample_state *sample,
                                                        int32_t s_fixed, int32_t t_fixed,
