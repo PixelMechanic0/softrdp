@@ -251,6 +251,36 @@ static void sample_triangle_texture_block(
 {
     const rdp_color_pipeline_state *color = &primitive->color;
     const tmem_state *tmem = primitive->tmem;
+    /* Hot path: single-cycle RGBA16 bilinear triangles (no LOD) sample the whole
+     * packet through the batched, invariant-hoisted sampler. */
+    if constexpr (Sampler == RDP_BLOCK_SAMPLER_RGBA16_BILERP) {
+        if (!uses_lod && color->needs_texel0) {
+            rdp_color texels[RDP_PACKET_LANES];
+            const uint16_t ok = tmem_sample_rgba16_bilerp_block(
+                tmem, &primitive->texture, block->sample_s, block->sample_t,
+                block->active_mask, count, texels);
+            for (uint32_t lane = 0; lane < count; lane++) {
+                const uint16_t bit = (uint16_t)(1u << lane);
+                if (!(block->active_mask & bit)) continue;
+                rdp_color texel1;
+                const bool ok1 = !color->needs_texel1 ||
+                    tmem_sample_color_fixed5(tmem, &primitive->texture_cycle1,
+                        block->sample_s[lane], block->sample_t[lane], &texel1);
+                if ((ok & bit) && ok1) {
+                    store_texel(block->texel0, lane, texels[lane]);
+                    if (color->needs_texel1)
+                        store_texel(block->texel1, lane, texel1);
+                    else
+                        store_texel(block->texel1, lane, texels[lane]);
+                } else if (decoded->has_shade) {
+                    block->fallback_mask |= bit;
+                } else {
+                    block->active_mask &= (uint16_t)~bit;
+                }
+            }
+            return;
+        }
+    }
     for (uint32_t lane = 0; lane < count; lane++) {
         const uint16_t bit = (uint16_t)(1u << lane);
         if (!(block->active_mask & bit)) continue;
@@ -783,6 +813,48 @@ static sr_result pipeline_render_rectangle_span_specialized(
         if (live_mask == 0u) continue;
 
         if (needs_texture) {
+            bool sampled = false;
+            /* Hot path: single-cycle RGBA16 bilinear rectangles sample the whole
+             * packet through the batched, invariant-hoisted sampler. */
+            if constexpr (Sampler == RDP_BLOCK_SAMPLER_RGBA16_BILERP) {
+                if (color->needs_texel0) {
+                    int32_t s_arr[RDP_PACKET_LANES];
+                    int32_t t_arr[RDP_PACKET_LANES];
+                    for (uint32_t lane = 0; lane < count; lane++) {
+                        s_arr[lane] = rectangle_sample_coord(work->s_fixed,
+                            work->dsdx_fixed, offset + lane, work->texture_coord_shift);
+                        t_arr[lane] = rectangle_sample_coord(work->t_fixed,
+                            work->dtdx_fixed, offset + lane, work->texture_coord_shift);
+                    }
+                    rdp_color texels[RDP_PACKET_LANES];
+                    const uint16_t ok = tmem_sample_rgba16_bilerp_block(
+                        primitive->tmem, &primitive->texture, s_arr, t_arr,
+                        live_mask, count, texels);
+                    for (uint32_t lane = 0; lane < count; lane++) {
+                        const uint16_t bit = (uint16_t)(1u << lane);
+                        if (!(live_mask & bit)) continue;
+                        if (!(ok & bit)) {
+                            live_mask &= (uint16_t)~bit;
+                            continue;
+                        }
+                        rdp_color texel1;
+                        if (color->needs_texel1 &&
+                            !tmem_sample_color_fixed5(primitive->tmem,
+                                &primitive->texture_cycle1, s_arr[lane], t_arr[lane],
+                                &texel1)) {
+                            live_mask &= (uint16_t)~bit;
+                            continue;
+                        }
+                        store_texel(packet.texel0, lane, texels[lane]);
+                        if (color->needs_texel1)
+                            store_texel(packet.texel1, lane, texel1);
+                        else
+                            store_texel(packet.texel1, lane, texels[lane]);
+                    }
+                    sampled = true;
+                }
+            }
+            if (!sampled)
             for (uint32_t lane = 0; lane < count; lane++) {
                 const uint16_t bit = (uint16_t)(1u << lane);
                 if (!(live_mask & bit)) continue;

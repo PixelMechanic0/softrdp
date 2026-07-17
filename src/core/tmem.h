@@ -433,7 +433,7 @@ static inline uint8_t clamp_i32_to_u8(int32_t value)
     return value < 0 ? 0u : (value > 255 ? 255u : (uint8_t)value);
 }
 
-static inline uint8_t bilerp_3tap_u8(uint8_t base, uint8_t edge_s, uint8_t edge_t, uint32_t frac_s, uint32_t frac_t)
+static inline __attribute__((always_inline)) uint8_t bilerp_3tap_u8(uint8_t base, uint8_t edge_s, uint8_t edge_t, uint32_t frac_s, uint32_t frac_t)
 {
     int32_t value = ((int32_t)edge_s - (int32_t)base) * (int32_t)frac_s;
     value += ((int32_t)edge_t - (int32_t)base) * (int32_t)frac_t;
@@ -442,7 +442,7 @@ static inline uint8_t bilerp_3tap_u8(uint8_t base, uint8_t edge_s, uint8_t edge_
     return clamp_i32_to_u8(value);
 }
 
-static inline rdp_color bilerp_3tap_color(rdp_color base, rdp_color edge_s, rdp_color edge_t, uint32_t frac_s, uint32_t frac_t)
+static inline __attribute__((always_inline)) rdp_color bilerp_3tap_color(rdp_color base, rdp_color edge_s, rdp_color edge_t, uint32_t frac_s, uint32_t frac_t)
 {
     return (rdp_color){
         bilerp_3tap_u8(base.r, edge_s.r, edge_t.r, frac_s, frac_t),
@@ -854,6 +854,145 @@ static inline bool tmem_sample_rgba16_bilerp_fixed5(const tmem_state *tmem,
         }
     }
     return tmem_fetch_rgba16_local(tmem, sample, s0, t0, color);
+}
+
+/*
+ * Batched RGBA16 bilinear sampler.
+ *
+ * Semantically identical to calling tmem_sample_rgba16_bilerp_fixed5 once per
+ * lane, but the per-sample invariants (tile shifts, origins, clamp/mirror/mask
+ * axis parameters, TMEM base and stride) are hoisted into address-free locals
+ * before the lane loop. In the scalar per-texel form these fields are re-read
+ * from the sample struct on every call; because the fragment block that the
+ * caller writes to is a uint16_t array, strict-aliasing forces the compiler to
+ * reload the uint16_t sample fields after every store. Loading them into locals
+ * here breaks that chain, and inlining the texel fetch and the 3-tap filter
+ * lets the compiler fuse fetch + bilerp arithmetic (otherwise separate
+ * out-of-line hot functions) into one straight-line body.
+ *
+ * Writes sampled colours into out[lane] for every lane set in `lanes`, and
+ * returns the mask of lanes that sampled successfully. Lanes that fail (out of
+ * bounds under a non-repeating axis, or a TMEM address past the end) are left
+ * clear in the returned mask, matching a false return from the scalar path.
+ */
+static inline uint16_t tmem_sample_rgba16_bilerp_block(
+    const tmem_state *tmem,
+    const rdp_texture_sample_state *sample,
+    const int32_t *s_fixed,
+    const int32_t *t_fixed,
+    uint16_t lanes,
+    uint32_t count,
+    rdp_color *out)
+{
+    if (!sample->width || !sample->height || !sample->stride) {
+        return 0;
+    }
+
+    const rdp_tile *tile = &sample->tile;
+    /* Address-free locals: not reloaded across the block stores. */
+    const uint8_t shift_s = tile->shift_s;
+    const uint8_t shift_t = tile->shift_t;
+    const int32_t origin_s = (int32_t)tile->sl << 3;
+    const int32_t origin_t = (int32_t)tile->tl << 3;
+    const int32_t hi_s = sample->bounds.sh >= sample->bounds.sl
+        ? (int32_t)(sample->bounds.sh - sample->bounds.sl) : 0;
+    const int32_t hi_t = sample->bounds.th >= sample->bounds.tl
+        ? (int32_t)(sample->bounds.th - sample->bounds.tl) : 0;
+    const uint32_t extent_s = sample->width;
+    const uint32_t extent_t = sample->height;
+    const uint8_t mask_s = tile->mask_s;
+    const uint8_t mask_t = tile->mask_t;
+    const bool clamp_s = tile->clamp_s != 0 || tile->mask_s == 0;
+    const bool clamp_t = tile->clamp_t != 0 || tile->mask_t == 0;
+    const bool mirror_s = tile->mirror_s != 0;
+    const bool mirror_t = tile->mirror_t != 0;
+    const uint32_t tmem_base = tile->tmem;
+    const uint32_t stride = sample->stride;
+    const bool mid_texel = sample->mid_texel;
+
+    uint16_t ok_mask = 0;
+    for (uint32_t lane = 0; lane < count; lane++) {
+        const uint16_t bit = (uint16_t)(1u << lane);
+        if (!(lanes & bit)) continue;
+
+        const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed[lane], shift_s);
+        const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed[lane], shift_t);
+        const int32_t shifted_s1 = shift_tile_coord_fixed5(s_fixed[lane] + 32, shift_s);
+        const int32_t shifted_t1 = shift_tile_coord_fixed5(t_fixed[lane] + 32, shift_t);
+        uint32_t s0, s1, t0, t1;
+        if (!resolve_tile_axis(fixed5_floor_to_texel(shifted_s - origin_s), 0,
+                               hi_s, extent_s, clamp_s, mirror_s, mask_s, &s0) ||
+            !resolve_tile_axis(fixed5_floor_to_texel(shifted_s1 - origin_s), 0,
+                               hi_s, extent_s, clamp_s, mirror_s, mask_s, &s1) ||
+            !resolve_tile_axis(fixed5_floor_to_texel(shifted_t - origin_t), 0,
+                               hi_t, extent_t, clamp_t, mirror_t, mask_t, &t0) ||
+            !resolve_tile_axis(fixed5_floor_to_texel(shifted_t1 - origin_t), 0,
+                               hi_t, extent_t, clamp_t, mirror_t, mask_t, &t1)) {
+            continue;
+        }
+
+        const uint32_t frac_s = (uint32_t)(shifted_s - origin_s) & 31u;
+        const uint32_t frac_t = (uint32_t)(shifted_t - origin_t) & 31u;
+
+        /* Inlined RGBA16 texel fetch: logical -> physical word byte -> decode. */
+        #define TMEM_RGBA16_TAP(dst, ls, lt)                                       \
+            do {                                                                   \
+                const uint32_t logical = tmem_base + (lt) * stride + (ls) * 2u;    \
+                const uint32_t byte = tmem_physical_word_byte(                     \
+                    logical ^ (((lt) & 1u) ? 4u : 0u));                            \
+                if (byte + 1u >= SR_TMEM_SIZE) goto lane_fallback;                 \
+                const uint16_t texel = ((uint16_t)tmem->bytes[byte] << 8) |        \
+                                       (uint16_t)tmem->bytes[byte + 1u];           \
+                (dst) = tmem_rgba16_decode_table[texel];                          \
+            } while (0)
+
+        rdp_color result;
+        if (mid_texel && frac_s == 16u && frac_t == 16u) {
+            rdp_color c00, c10, c01, c11;
+            TMEM_RGBA16_TAP(c00, s0, t0);
+            TMEM_RGBA16_TAP(c10, s1, t0);
+            TMEM_RGBA16_TAP(c01, s0, t1);
+            TMEM_RGBA16_TAP(c11, s1, t1);
+            result = (rdp_color){
+                (uint8_t)(((uint32_t)c00.r + c10.r + c01.r + c11.r + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.g + c10.g + c01.g + c11.g + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.b + c10.b + c01.b + c11.b + 2u) >> 2),
+                (uint8_t)(((uint32_t)c00.a + c10.a + c01.a + c11.a + 2u) >> 2)
+            };
+        } else if (frac_s + frac_t >= 32u) {
+            rdp_color c11, c10, c01;
+            TMEM_RGBA16_TAP(c11, s1, t1);
+            TMEM_RGBA16_TAP(c10, s1, t0);
+            TMEM_RGBA16_TAP(c01, s0, t1);
+            result = bilerp_3tap_color(c11, c10, c01, 32u - frac_t, 32u - frac_s);
+        } else {
+            rdp_color c00, c10, c01;
+            TMEM_RGBA16_TAP(c00, s0, t0);
+            TMEM_RGBA16_TAP(c10, s1, t0);
+            TMEM_RGBA16_TAP(c01, s0, t1);
+            result = bilerp_3tap_color(c00, c10, c01, frac_s, frac_t);
+        }
+        out[lane] = result;
+        ok_mask |= bit;
+        continue;
+
+    lane_fallback:
+        /* A tap ran off the end of TMEM: fall back to the base texel exactly as
+         * the scalar path does at its tail. If even that address is invalid the
+         * lane fails. */
+        {
+            const uint32_t logical = tmem_base + t0 * stride + s0 * 2u;
+            const uint32_t byte = tmem_physical_word_byte(
+                logical ^ ((t0 & 1u) ? 4u : 0u));
+            if (byte + 1u >= SR_TMEM_SIZE) continue;
+            const uint16_t texel = ((uint16_t)tmem->bytes[byte] << 8) |
+                                   (uint16_t)tmem->bytes[byte + 1u];
+            out[lane] = tmem_rgba16_decode_table[texel];
+            ok_mask |= bit;
+        }
+        #undef TMEM_RGBA16_TAP
+    }
+    return ok_mask;
 }
 
 static inline bool tmem_sample_bilerp_compiled_fixed5(const tmem_state *tmem,
