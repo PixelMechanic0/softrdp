@@ -1,4 +1,5 @@
 #include "pj64_gfx.h"
+#include "pj64_dump.h"
 #include "pj64_log.h"
 
 #include "../../core/rdp_commands.h"
@@ -8,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 
 #define PJ64_MAX_FRAME_WIDTH 800u
 #define PJ64_MAX_FRAME_HEIGHT 600u
@@ -35,36 +35,7 @@ static LONG g_old_style = 0;
 static WINDOWPLACEMENT g_old_pos;
 #endif
 
-static bool g_dump_requested = false;
-static bool g_record_active = false;
-static FILE* g_frame_dump_file = NULL;
-static SRWLOCK g_frame_dump_lock = SRWLOCK_INIT;
 static uint32_t g_rdram_size = 0x400000;
-enum { FRAME_DUMP_PRESENT_COUNT = 4u };
-static uint32_t g_dump_presents_remaining = 0;
-static uint8_t *g_dump_rdram_shadow = NULL;
-enum { FRAME_DUMP_PAGE_SIZE = 4096u };
-
-static bool dump_write_all(FILE *file, const void *data, size_t size)
-{
-    const uint8_t *cursor = (const uint8_t *)data;
-    while (size) {
-        const size_t chunk = size > 64u * 1024u ? 64u * 1024u : size;
-        const size_t written = fwrite(cursor, 1, chunk, file);
-        if (written != chunk) return false;
-        cursor += written;
-        size -= written;
-    }
-    return true;
-}
-static uint32_t g_recorded_lists_count = 0;
-static long g_list_count_offset = 0;
-
-#if SOFTRDP_ENABLE_PERF_LOG
-static sr_debug_stats g_perf_baseline_stats;
-static uint32_t g_perf_frame_count;
-static double g_perf_draw_total_ms;
-#endif
 
 static uint32_t *reg32(DWORD *reg)
 {
@@ -94,11 +65,6 @@ static void acknowledge_dp_list(void)
     }
 
     raise_mi_interrupt(&g_gfx);
-}
-
-static uint32_t read_reg_value(DWORD *reg)
-{
-    return reg ? (uint32_t)*reg : 0;
 }
 
 static bool ensure_frame_storage(uint32_t width, uint32_t height)
@@ -133,6 +99,11 @@ static void release_frame_storage(void)
 }
 
 #if SOFTRDP_ENABLE_LOG
+static uint32_t read_reg_value(DWORD *reg)
+{
+    return reg ? (uint32_t)*reg : 0;
+}
+
 static const char *result_name(sr_result result)
 {
     switch (result) {
@@ -150,67 +121,7 @@ static const char *result_name(sr_result result)
 }
 #endif
 
-static bool dump_write_record(FILE *file,
-                              uint32_t command_size,
-                              const uint32_t dp_regs[8],
-                              const uint32_t vi_regs[14],
-                              uint32_t command_address,
-                              bool xbus_dma)
-{
-    uint32_t changed[2048];
-    uint32_t changed_count = 0;
-    if (!file || !g_dump_rdram_shadow || !g_gfx.RDRAM ||
-        g_rdram_size / FRAME_DUMP_PAGE_SIZE > 2048u) return false;
-    const uint32_t page_count = g_rdram_size / FRAME_DUMP_PAGE_SIZE;
-    for (uint32_t page = 0; page < page_count; page++) {
-        const uint32_t offset = page * FRAME_DUMP_PAGE_SIZE;
-        if (memcmp(g_dump_rdram_shadow + offset, g_gfx.RDRAM + offset,
-                   FRAME_DUMP_PAGE_SIZE) != 0)
-            changed[changed_count++] = page;
-    }
-
-    const size_t record_size = sizeof(changed_count) +
-        (size_t)changed_count * (sizeof(uint32_t) + FRAME_DUMP_PAGE_SIZE) +
-        sizeof(command_size) + 8u * sizeof(uint32_t) + 14u * sizeof(uint32_t) +
-        command_size;
-    uint8_t *record = malloc(record_size);
-    if (!record) return false;
-
-    uint8_t *cursor = record;
-    memcpy(cursor, &changed_count, sizeof(changed_count));
-    cursor += sizeof(changed_count);
-    for (uint32_t i = 0; i < changed_count; i++) {
-        const uint32_t page = changed[i];
-        const uint32_t offset = page * FRAME_DUMP_PAGE_SIZE;
-        memcpy(cursor, &page, sizeof(page));
-        cursor += sizeof(page);
-        memcpy(cursor, g_gfx.RDRAM + offset, FRAME_DUMP_PAGE_SIZE);
-        memcpy(g_dump_rdram_shadow + offset, cursor, FRAME_DUMP_PAGE_SIZE);
-        cursor += FRAME_DUMP_PAGE_SIZE;
-    }
-    memcpy(cursor, &command_size, sizeof(command_size));
-    cursor += sizeof(command_size);
-    memcpy(cursor, dp_regs, 8u * sizeof(uint32_t));
-    cursor += 8u * sizeof(uint32_t);
-    memcpy(cursor, vi_regs, 14u * sizeof(uint32_t));
-    cursor += 14u * sizeof(uint32_t);
-    if (command_size) {
-        if (xbus_dma) {
-            for (uint32_t byte = 0; byte < command_size; byte++) {
-                cursor[byte] = g_gfx.DMEM[(command_address + byte) & (SR_DMEM_SIZE - 1u)];
-            }
-        } else {
-            memcpy(cursor, g_gfx.RDRAM + command_address, command_size);
-        }
-        cursor += command_size;
-    }
-
-    const bool ok = cursor == record + record_size &&
-                    fwrite(record, 1, record_size, file) == record_size;
-    free(record);
-    return ok;
-}
-
+#if SOFTRDP_ENABLE_LOG
 static bool command_has_texture_debug(uint32_t command_id)
 {
     switch ((rdp_command_id)command_id) {
@@ -272,6 +183,7 @@ static bool log_sample_u32(uint32_t count, uint32_t early_count, uint32_t interv
 {
     return count <= early_count || (interval != 0u && (count % interval) == 0u);
 }
+#endif
 
 static sr_host_interface make_host_interface(GFX_INFO *gfx)
 {
@@ -353,7 +265,6 @@ static void ensure_window_size(HWND hwnd)
     (void)hwnd;
 #endif
 }
-
 static bool start_runtime(void)
 {
     sr_host_interface host;
@@ -381,12 +292,14 @@ static bool start_runtime(void)
     }
 
     host = make_host_interface(&g_gfx);
+    pj64_dump_detach();
     sr_destroy(g_context);
     g_context = sr_create(&host);
     if (!g_context) {
         pj64_log_printf("start_runtime: sr_create failed");
         return false;
     }
+    pj64_dump_attach(&g_gfx, g_context, g_rdram_size);
 
     if (!sr_present_init(&g_present, g_gfx.hWnd)) {
         pj64_log_printf("start_runtime: OpenGL presentation init failed");
@@ -399,211 +312,15 @@ static bool start_runtime(void)
 
     g_runtime_started = true;
     pj64_log_printf("start_runtime: ready");
-#if SOFTRDP_ENABLE_PERF_LOG
-    g_perf_baseline_stats = sr_get_debug_stats(g_context);
-    g_perf_frame_count = 0;
-    g_perf_draw_total_ms = 0.0;
-#endif
     return true;
 }
-
-#if SOFTRDP_ENABLE_PERF_LOG
-static const char *texture_format_name(uint32_t format)
-{
-    switch (format) {
-    case 0: return "RGBA";
-    case 1: return "YUV";
-    case 2: return "CI";
-    case 3: return "IA";
-    case 4: return "I";
-    default: return "?";
-    }
-}
-
-static const char *texture_size_name(uint32_t size)
-{
-    switch (size) {
-    case 0: return "4b";
-    case 1: return "8b";
-    case 2: return "16b";
-    case 3: return "32b";
-    default: return "?";
-    }
-}
-
-static void log_format_size_delta(const char *label,
-                                  const uint64_t current[5][4],
-                                  const uint64_t baseline[5][4])
-{
-    char line[512];
-    size_t used = 0;
-    bool any = false;
-
-    used += (size_t)snprintf(line + used, sizeof(line) - used, "      %s:", label);
-    for (uint32_t format = 0; format < 5; format++) {
-        for (uint32_t size = 0; size < 4; size++) {
-            const uint64_t delta = current[format][size] - baseline[format][size];
-            if (delta == 0) {
-                continue;
-            }
-            any = true;
-            if (used + 64u >= sizeof(line)) {
-                line[sizeof(line) - 1u] = '\0';
-                pj64_log_printf("%s", line);
-                used = 0;
-                used += (size_t)snprintf(line + used, sizeof(line) - used, "      %s:", label);
-            }
-            used += (size_t)snprintf(line + used,
-                                     sizeof(line) - used,
-                                     " %s/%s=%llu",
-                                     texture_format_name(format),
-                                     texture_size_name(size),
-                                     (unsigned long long)delta);
-        }
-    }
-
-    if (any) {
-        pj64_log_printf("%s", line);
-    }
-}
-
-static void log_perf_summary(const char *header)
-{
-    if (!g_context || g_perf_frame_count == 0) {
-        return;
-    }
-
-    sr_debug_stats current_stats = sr_get_debug_stats(g_context);
-    LARGE_INTEGER freq;
-    QueryPerformanceFrequency(&freq);
-    double freq_d = (double)freq.QuadPart;
-
-    uint64_t delta_rdp_ticks = current_stats.process_rdp_ticks - g_perf_baseline_stats.process_rdp_ticks;
-    uint64_t delta_tri_ticks = current_stats.triangle_ticks - g_perf_baseline_stats.triangle_ticks;
-    uint64_t delta_tri_count = current_stats.triangle_count - g_perf_baseline_stats.triangle_count;
-    uint64_t delta_rect_ticks = current_stats.rect_ticks - g_perf_baseline_stats.rect_ticks;
-    uint64_t delta_rect_count = current_stats.rect_count - g_perf_baseline_stats.rect_count;
-    uint64_t delta_tex_ticks = current_stats.tex_load_ticks - g_perf_baseline_stats.tex_load_ticks;
-    uint64_t delta_tex_count = current_stats.tex_load_count - g_perf_baseline_stats.tex_load_count;
-    uint64_t delta_sample_attempts = current_stats.texture_sample_attempts - g_perf_baseline_stats.texture_sample_attempts;
-    uint64_t delta_sample_hits = current_stats.texture_sample_hits - g_perf_baseline_stats.texture_sample_hits;
-    uint64_t delta_sample_misses = current_stats.texture_sample_misses - g_perf_baseline_stats.texture_sample_misses;
-    uint64_t delta_sample_fallbacks = current_stats.texture_sample_shade_fallbacks - g_perf_baseline_stats.texture_sample_shade_fallbacks;
-    uint64_t delta_sample_tlut = current_stats.texture_sample_tlut_attempts - g_perf_baseline_stats.texture_sample_tlut_attempts;
-    uint64_t delta_sample_bilerp = current_stats.texture_sample_bilerp_attempts - g_perf_baseline_stats.texture_sample_bilerp_attempts;
-    uint64_t delta_sample_quad = current_stats.texture_sample_quad_attempts - g_perf_baseline_stats.texture_sample_quad_attempts;
-    uint64_t delta_sample_mid = current_stats.texture_sample_mid_texel_attempts - g_perf_baseline_stats.texture_sample_mid_texel_attempts;
-    uint64_t delta_sample_perspective = current_stats.texture_sample_perspective_attempts - g_perf_baseline_stats.texture_sample_perspective_attempts;
-    uint64_t delta_sample_texelshade = current_stats.texture_sample_texel0_shade_attempts - g_perf_baseline_stats.texture_sample_texel0_shade_attempts;
-    uint64_t delta_rect_sample_attempts = current_stats.rect_texture_sample_attempts - g_perf_baseline_stats.rect_texture_sample_attempts;
-    uint64_t delta_rect_sample_hits = current_stats.rect_texture_sample_hits - g_perf_baseline_stats.rect_texture_sample_hits;
-    uint64_t delta_rect_sample_misses = current_stats.rect_texture_sample_misses - g_perf_baseline_stats.rect_texture_sample_misses;
-    uint64_t delta_fragment_attempts = current_stats.fragment_attempts - g_perf_baseline_stats.fragment_attempts;
-    uint64_t delta_fragment_alpha_rejects = current_stats.fragment_alpha_rejects - g_perf_baseline_stats.fragment_alpha_rejects;
-    uint64_t delta_fragment_depth_tests = current_stats.fragment_depth_tests - g_perf_baseline_stats.fragment_depth_tests;
-    uint64_t delta_fragment_depth_rejects = current_stats.fragment_depth_rejects - g_perf_baseline_stats.fragment_depth_rejects;
-    uint64_t delta_fragment_writes = current_stats.fragment_writes - g_perf_baseline_stats.fragment_writes;
-    uint64_t delta_load_blocks = current_stats.tex_load_block_count - g_perf_baseline_stats.tex_load_block_count;
-    uint64_t delta_load_tiles = current_stats.tex_load_tile_count - g_perf_baseline_stats.tex_load_tile_count;
-    uint64_t delta_load_tluts = current_stats.tex_load_tlut_count - g_perf_baseline_stats.tex_load_tlut_count;
-    uint64_t delta_vi_ticks = current_stats.vi_ticks - g_perf_baseline_stats.vi_ticks;
-    uint64_t delta_commands = current_stats.commands_seen - g_perf_baseline_stats.commands_seen;
-    uint64_t delta_draws = current_stats.draw_calls_seen - g_perf_baseline_stats.draw_calls_seen;
-
-    double rdp_ms = (double)delta_rdp_ticks * 1000.0 / freq_d;
-    double tri_ms = (double)delta_tri_ticks * 1000.0 / freq_d;
-    double rect_ms = (double)delta_rect_ticks * 1000.0 / freq_d;
-    double tex_ms = (double)delta_tex_ticks * 1000.0 / freq_d;
-    double vi_ms = (double)delta_vi_ticks * 1000.0 / freq_d;
-
-    pj64_log_printf("PERF SUMMARY - %s (over %u frames):", header, g_perf_frame_count);
-    pj64_log_printf("  RDP processing:       %8.3f ms (avg %7.3f ms/frame)", rdp_ms, rdp_ms / g_perf_frame_count);
-    pj64_log_printf("    Included timers; these overlap with RDP processing total:");
-    pj64_log_printf("    - Triangles:  %5llu calls, %8.3f ms (avg %7.3f ms/tri)",
-                      (unsigned long long)delta_tri_count, tri_ms, delta_tri_count ? tri_ms / delta_tri_count : 0.0);
-    pj64_log_printf("    - Rectangles: %5llu calls, %8.3f ms (avg %7.3f ms/rect)",
-                      (unsigned long long)delta_rect_count, rect_ms, delta_rect_count ? rect_ms / delta_rect_count : 0.0);
-    pj64_log_printf("    - Tex Loads:  %5llu calls, %8.3f ms (avg %7.3f ms/load)",
-                      (unsigned long long)delta_tex_count, tex_ms, delta_tex_count ? tex_ms / delta_tex_count : 0.0);
-    pj64_log_printf("      load cmds: block=%llu tile=%llu tlut=%llu",
-                      (unsigned long long)delta_load_blocks,
-                      (unsigned long long)delta_load_tiles,
-                      (unsigned long long)delta_load_tluts);
-    log_format_size_delta("load formats",
-                          current_stats.tex_load_by_format_size,
-                          g_perf_baseline_stats.tex_load_by_format_size);
-    pj64_log_printf("    - Tex Samples: tri attempts=%llu hits=%llu misses=%llu shade_fallbacks=%llu rect attempts=%llu hits=%llu misses=%llu",
-                      (unsigned long long)delta_sample_attempts,
-                      (unsigned long long)delta_sample_hits,
-                      (unsigned long long)delta_sample_misses,
-                      (unsigned long long)delta_sample_fallbacks,
-                      (unsigned long long)delta_rect_sample_attempts,
-                      (unsigned long long)delta_rect_sample_hits,
-                      (unsigned long long)delta_rect_sample_misses);
-    pj64_log_printf("      sample modes: tlut=%llu bilerp0=%llu sample_quad=%llu mid_texel=%llu perspective=%llu texel0*shade=%llu",
-                      (unsigned long long)delta_sample_tlut,
-                      (unsigned long long)delta_sample_bilerp,
-                      (unsigned long long)delta_sample_quad,
-                      (unsigned long long)delta_sample_mid,
-                      (unsigned long long)delta_sample_perspective,
-                      (unsigned long long)delta_sample_texelshade);
-    log_format_size_delta("sample attempts",
-                          current_stats.texture_sample_by_format_size,
-                          g_perf_baseline_stats.texture_sample_by_format_size);
-    log_format_size_delta("sample hits",
-                          current_stats.texture_sample_hits_by_format_size,
-                          g_perf_baseline_stats.texture_sample_hits_by_format_size);
-    pj64_log_printf("      sample-range s=%u..%u t=%u..%u color_xor=%08x",
-                      current_stats.texture_sample_min_s,
-                      current_stats.texture_sample_max_s,
-                      current_stats.texture_sample_min_t,
-                      current_stats.texture_sample_max_t,
-                      current_stats.texture_sample_color_xor);
-    pj64_log_printf("      sample-fixed s=%d..%d t=%d..%d w=%d..%d",
-                      current_stats.texture_sample_min_s_fixed,
-                      current_stats.texture_sample_max_s_fixed,
-                      current_stats.texture_sample_min_t_fixed,
-                      current_stats.texture_sample_max_t_fixed,
-                      current_stats.texture_sample_min_w_fixed,
-                      current_stats.texture_sample_max_w_fixed);
-    pj64_log_printf("    - Fragments: attempts=%llu alpha_rejects=%llu depth=%llu/%llu writes=%llu color_xor=%08x address=%08x..%08x",
-                      (unsigned long long)delta_fragment_attempts,
-                      (unsigned long long)delta_fragment_alpha_rejects,
-                      (unsigned long long)delta_fragment_depth_rejects,
-                      (unsigned long long)delta_fragment_depth_tests,
-                      (unsigned long long)delta_fragment_writes,
-                      current_stats.fragment_color_xor,
-                      current_stats.fragment_min_address,
-                      current_stats.fragment_max_address);
-    pj64_log_printf("  Total VI Scanout:     %8.3f ms (avg %7.3f ms/frame)", vi_ms, vi_ms / g_perf_frame_count);
-    pj64_log_printf("  Total Present/Draw:   %8.3f ms (avg %7.3f ms/frame)", g_perf_draw_total_ms, g_perf_draw_total_ms / g_perf_frame_count);
-    pj64_log_printf("  Total Commands: %llu, Draw Calls: %llu",
-                      (unsigned long long)delta_commands, (unsigned long long)delta_draws);
-
-    g_perf_baseline_stats = current_stats;
-    g_perf_frame_count = 0;
-    g_perf_draw_total_ms = 0.0;
-}
-#endif
 
 static void stop_runtime(void)
 {
     if (g_fullscreen) {
         ChangeWindow();
     }
-#if SOFTRDP_ENABLE_PERF_LOG
-    log_perf_summary("Shutdown");
-#endif
-    AcquireSRWLockExclusive(&g_frame_dump_lock);
-    g_record_active = false;
-    g_dump_requested = false;
-    if (g_frame_dump_file) {
-        fclose(g_frame_dump_file);
-        g_frame_dump_file = NULL;
-    }
-    free(g_dump_rdram_shadow);
-    g_dump_rdram_shadow = NULL;
-    ReleaseSRWLockExclusive(&g_frame_dump_lock);
+    pj64_dump_detach();
     if (g_runtime_started || pj64_log_is_open()) {
         pj64_log_printf("stop_runtime rdp_calls=%u update_calls=%u uploaded_frames=%u",
                           g_process_rdp_calls,
@@ -746,149 +463,27 @@ void PJ64_CALL ProcessDList(void)
 
 void PJ64_CALL ProcessRDPList(void)
 {
+#if SOFTRDP_ENABLE_LOG
     sr_result result = SR_ERROR_INVALID_ARGUMENT;
-    sr_debug_stats stats;
+#endif
 
     (void)start_runtime();
     g_process_rdp_calls++;
 
     if (g_context) {
-        static bool f11_was_down = false;
-        const bool f11_is_down = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
-        const bool dump_key_pressed = f11_is_down && !f11_was_down;
-        f11_was_down = f11_is_down;
-
-        AcquireSRWLockExclusive(&g_frame_dump_lock);
-        if (dump_key_pressed && !g_record_active) {
-            g_dump_requested = true;
-            pj64_log_printf("F11 pressed: Requesting frame dump on next RDP list");
-        }
-        if (g_dump_requested) {
-            g_dump_requested = false;
-            g_record_active = true;
-            g_recorded_lists_count = 0;
-            g_dump_presents_remaining = FRAME_DUMP_PRESENT_COUNT;
-            
-            g_frame_dump_file = fopen("frame_dump.bin", "wb");
-            if (g_frame_dump_file) {
-                uint32_t magic = 0x34444653; // "SFD4"
-                uint32_t rdram_size = g_rdram_size;
-                uint32_t bswapped = g_gfx.MemoryBswaped ? 1 : 0;
-                uint32_t zero = 0;
-                uint32_t state_size = (uint32_t)sr_state_snapshot_size();
-                void *state = malloc(state_size);
-                
-                fwrite(&magic, 4, 1, g_frame_dump_file);
-                fwrite(&rdram_size, 4, 1, g_frame_dump_file);
-                fwrite(&bswapped, 4, 1, g_frame_dump_file);
-                g_list_count_offset = ftell(g_frame_dump_file);
-                fwrite(&zero, 4, 1, g_frame_dump_file); // list_count placeholder
-                fwrite(&state_size, 4, 1, g_frame_dump_file);
-                if (state && sr_save_state(g_context, state, state_size) == SR_OK)
-                    fwrite(state, 1, state_size, g_frame_dump_file);
-                else {
-                    pj64_log_printf("ERROR: Could not capture RDP state for frame dump");
-                    fclose(g_frame_dump_file);
-                    g_frame_dump_file = NULL;
-                    g_record_active = false;
-                }
-                free(state);
-                
-                // Write initial RDRAM
-                if (g_frame_dump_file &&
-                    !dump_write_all(g_frame_dump_file, g_gfx.RDRAM, g_rdram_size)) {
-                    pj64_log_printf("ERROR: Could not write initial RDRAM to frame dump (errno=%d)", errno);
-                    fclose(g_frame_dump_file);
-                    g_frame_dump_file = NULL;
-                    g_record_active = false;
-                }
-                free(g_dump_rdram_shadow);
-                g_dump_rdram_shadow = NULL;
-                if (g_frame_dump_file) {
-                    g_dump_rdram_shadow = malloc(g_rdram_size);
-                    if (g_dump_rdram_shadow)
-                        memcpy(g_dump_rdram_shadow, g_gfx.RDRAM, g_rdram_size);
-                    else {
-                        fclose(g_frame_dump_file);
-                        g_frame_dump_file = NULL;
-                        g_record_active = false;
-                    }
-                }
-                
-                pj64_log_printf("Starting frame dump recording for %u presented frames...",
-                                  FRAME_DUMP_PRESENT_COUNT);
-            } else {
-                g_record_active = false;
-                pj64_log_printf("ERROR: Could not open frame_dump.bin for writing!");
-            }
-        }
- 
-        if (g_record_active && g_frame_dump_file) {
-            uint32_t current = read_reg_value(g_gfx.DPC_CURRENT_REG) & ~7u;
-            uint32_t end = read_reg_value(g_gfx.DPC_END_REG) & ~7u;
-            const bool xbus_dma = (read_reg_value(g_gfx.DPC_STATUS_REG) & 0x001u) != 0u;
-            uint32_t size = 0;
-            if (end > current) {
-                if (xbus_dma && g_gfx.DMEM && end - current <= SR_DMEM_SIZE) {
-                    size = end - current;
-                } else if (!xbus_dma && current < g_rdram_size && end <= g_rdram_size) {
-                    size = end - current;
-                }
-            }
-            
-            uint32_t dp_regs[8];
-            dp_regs[0] = read_reg_value(g_gfx.DPC_START_REG);
-            dp_regs[1] = read_reg_value(g_gfx.DPC_END_REG);
-            dp_regs[2] = read_reg_value(g_gfx.DPC_CURRENT_REG);
-            dp_regs[3] = read_reg_value(g_gfx.DPC_STATUS_REG);
-            dp_regs[4] = read_reg_value(g_gfx.DPC_CLOCK_REG);
-            dp_regs[5] = read_reg_value(g_gfx.DPC_BUFBUSY_REG);
-            dp_regs[6] = read_reg_value(g_gfx.DPC_PIPEBUSY_REG);
-            dp_regs[7] = read_reg_value(g_gfx.DPC_TMEM_REG);
-            
-            uint32_t vi_regs[14];
-            vi_regs[0] = read_reg_value(g_gfx.VI_STATUS_REG);
-            vi_regs[1] = read_reg_value(g_gfx.VI_ORIGIN_REG);
-            vi_regs[2] = read_reg_value(g_gfx.VI_WIDTH_REG);
-            vi_regs[3] = read_reg_value(g_gfx.VI_INTR_REG);
-            vi_regs[4] = read_reg_value(g_gfx.VI_V_CURRENT_LINE_REG);
-            vi_regs[5] = read_reg_value(g_gfx.VI_TIMING_REG);
-            vi_regs[6] = read_reg_value(g_gfx.VI_V_SYNC_REG);
-            vi_regs[7] = read_reg_value(g_gfx.VI_H_SYNC_REG);
-            vi_regs[8] = read_reg_value(g_gfx.VI_LEAP_REG);
-            vi_regs[9] = read_reg_value(g_gfx.VI_H_START_REG);
-            vi_regs[10] = read_reg_value(g_gfx.VI_V_START_REG);
-            vi_regs[11] = read_reg_value(g_gfx.VI_V_BURST_REG);
-            vi_regs[12] = read_reg_value(g_gfx.VI_X_SCALE_REG);
-            vi_regs[13] = read_reg_value(g_gfx.VI_Y_SCALE_REG);
-            
-            if (!dump_write_record(g_frame_dump_file, size, dp_regs, vi_regs, current,
-                                   xbus_dma)) {
-                pj64_log_printf("ERROR: Could not write atomic frame dump record");
-                fclose(g_frame_dump_file);
-                g_frame_dump_file = NULL;
-                g_record_active = false;
-                free(g_dump_rdram_shadow);
-                g_dump_rdram_shadow = NULL;
-            } else {
-                g_recorded_lists_count++;
-            }
-        }
-        ReleaseSRWLockExclusive(&g_frame_dump_lock);
-
+        const bool dump_armed = pj64_dump_armed;
+        if (dump_armed) pj64_dump_before_list();
+#if SOFTRDP_ENABLE_LOG
         result = sr_process_rdp_list(g_context);
-        AcquireSRWLockExclusive(&g_frame_dump_lock);
-        if (g_record_active && g_dump_rdram_shadow && g_gfx.RDRAM) {
-            /* RDP writes must be reproduced independently by each replay
-             * renderer, not injected into the next record as host deltas.
-             */
-            memcpy(g_dump_rdram_shadow, g_gfx.RDRAM, g_rdram_size);
-        }
-        ReleaseSRWLockExclusive(&g_frame_dump_lock);
-        stats = sr_get_debug_stats(g_context);
+#else
+        (void)sr_process_rdp_list(g_context);
+#endif
+        if (dump_armed) pj64_dump_after_list();
+#if SOFTRDP_ENABLE_LOG
         if (PJ64_LOG_ENABLED &&
             (log_sample_u32(g_process_rdp_calls, 32u, 600u) ||
              (result != SR_OK && log_sample_u32(g_process_rdp_calls, 128u, 120u)))) {
+            const sr_debug_stats stats = sr_get_debug_stats(g_context);
             pj64_log_printf("RDP call=%u result=%s list=%08x-%08x bytes=%u last=%08x %02x/%s ci=%08x/%ux%u/%u",
                               g_process_rdp_calls,
                               result_name(result),
@@ -908,8 +503,11 @@ void PJ64_CALL ProcessRDPList(void)
                 log_texture_debug(&stats);
             }
         }
+#endif
     } else {
+#if SOFTRDP_ENABLE_LOG
         pj64_log_printf("RDP call=%u no context, acknowledging", g_process_rdp_calls);
+#endif
         acknowledge_dp_list();
     }
 }
@@ -948,6 +546,7 @@ void PJ64_CALL UpdateScreen(void)
     ensure_window_size(g_gfx.hWnd);
 
     (void)start_runtime();
+    pj64_dump_poll_hotkey();
     g_update_screen_calls++;
     memset(&vi_info, 0, sizeof(vi_info));
     if (g_context) (void)sr_get_vi_frame_info(g_context, &vi_info);
@@ -961,36 +560,10 @@ void PJ64_CALL UpdateScreen(void)
     }
     sr_present_set_display_size(&g_present, g_display_width, g_display_height);
 
-    AcquireSRWLockExclusive(&g_frame_dump_lock);
-    if (g_record_active && g_dump_presents_remaining > 0u) {
-        g_dump_presents_remaining--;
-    }
-
-    if (g_record_active && g_dump_presents_remaining == 0u) {
-        g_record_active = false;
-        if (g_frame_dump_file) {
-            // Write final reference RDRAM output
-            const bool wrote_rdram = dump_write_all(g_frame_dump_file, g_gfx.RDRAM,
-                                                     g_rdram_size);
-            const bool sought_header = wrote_rdram &&
-                                       fseek(g_frame_dump_file, g_list_count_offset, SEEK_SET) == 0;
-            const bool wrote_count = sought_header &&
-                                     fwrite(&g_recorded_lists_count, 4, 1, g_frame_dump_file) == 1;
-            const bool closed = fclose(g_frame_dump_file) == 0;
-            g_frame_dump_file = NULL;
-            free(g_dump_rdram_shadow);
-            g_dump_rdram_shadow = NULL;
-            if (wrote_rdram && wrote_count && closed)
-                pj64_log_printf("Frame dump completed successfully! Recorded %u lists.", g_recorded_lists_count);
-            else
-                pj64_log_printf("ERROR: Frame dump incomplete (rdram=%d header=%d close=%d errno=%d)",
-                                  wrote_rdram ? 1 : 0, wrote_count ? 1 : 0,
-                                  closed ? 1 : 0, errno);
-        }
-    }
-    ReleaseSRWLockExclusive(&g_frame_dump_lock);
+    if (pj64_dump_armed) pj64_dump_on_present();
 
     if (!g_context || !g_present.ready || !ensure_frame_storage(g_frame_width, g_frame_height)) {
+#if SOFTRDP_ENABLE_LOG
         if (PJ64_LOG_ENABLED && log_sample_u32(g_update_screen_calls, 32u, 600u)) {
             pj64_log_printf("UpdateScreen call=%u skipped context=%d present=%d target=%ux%u stride=%u",
                               g_update_screen_calls,
@@ -1000,6 +573,7 @@ void PJ64_CALL UpdateScreen(void)
                               g_frame_height,
                               g_frame_width);
         }
+#endif
         return;
     }
 
@@ -1034,15 +608,6 @@ void PJ64_CALL UpdateScreen(void)
                                            g_frame_width, g_frame_height,
                                            g_frame_width);
     }
-
-
-#if SOFTRDP_ENABLE_PERF_LOG
-    g_perf_frame_count++;
-    if (g_perf_frame_count >= 60) {
-        log_perf_summary("Periodic");
-    }
-#endif
-
     if (uploaded) {
         g_uploaded_frames++;
     }

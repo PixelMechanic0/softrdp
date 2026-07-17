@@ -45,6 +45,7 @@ CORE_SRCS := \
 
 PLUGIN_SRCS := \
 	src/plugin/pj64/pj64_gfx.c \
+	src/plugin/pj64/pj64_dump.c \
 	src/plugin/pj64/pj64_log.c
 
 M64P_SRCS := \
