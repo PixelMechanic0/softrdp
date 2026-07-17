@@ -442,20 +442,13 @@ void sr_present_set_window_size(sr_present *present, uint32_t width, uint32_t he
     present->window_height = height;
 }
 
-void sr_present_draw(sr_present *present)
+/* Render the frame into the current framebuffer. Assumes the GL context is
+ * already current and does not swap; callers own MakeCurrent/SwapBuffers so a
+ * combined upload+draw only pays for a single context switch per frame. */
+static void draw_locked(sr_present *present)
 {
     int width;
     int height;
-
-    if (!present || !present->ready) {
-        return;
-    }
-
-    if (!present->external_context) {
-        if (!wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
-            return;
-        }
-    }
 
     if (present->external_context) {
         width = present->window_width ? present->window_width : 640;
@@ -508,6 +501,21 @@ void sr_present_draw(sr_present *present)
     if (scissor_test) glEnable(GL_SCISSOR_TEST);
     if (blend) glEnable(GL_BLEND);
     if (cull_face) glEnable(GL_CULL_FACE);
+}
+
+void sr_present_draw(sr_present *present)
+{
+    if (!present || !present->ready) {
+        return;
+    }
+
+    if (!present->external_context) {
+        if (!wglMakeCurrent((HDC)present->hdc, (HGLRC)present->glrc)) {
+            return;
+        }
+    }
+
+    draw_locked(present);
 
     if (!present->external_context) {
         SwapBuffers((HDC)present->hdc);
@@ -546,7 +554,14 @@ bool sr_present_upload_rgba8(sr_present *present,
 
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
     present->has_frame = true;
-    sr_present_draw(present);
+
+    /* Context is already current from the upload above: draw without a second
+     * MakeCurrent, then swap and release once. */
+    draw_locked(present);
+    if (!present->external_context) {
+        SwapBuffers((HDC)present->hdc);
+        wglMakeCurrent(NULL, NULL);
+    }
     return true;
 }
 
