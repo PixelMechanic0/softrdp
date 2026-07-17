@@ -146,60 +146,78 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     plan->state = VI_SCANOUT_READY;
 }
 
-static sr_result decode_row(const vi_scanout_plan *plan,
-                            const sr_memory *memory, uint32_t source_y,
-                            sr_rgba8 *row)
+/* One-time decode table for RGBA5551 texels (indexed by big-endian halfword). */
+static sr_rgba8 vi_rgba5551_table[65536];
+static bool vi_rgba5551_table_ready;
+
+static void vi_build_rgba5551_table(void)
 {
-    const uint64_t row_base = (uint64_t)plan->origin +
-                              (uint64_t)source_y * plan->source_stride *
+    for (uint32_t v = 0; v < 65536u; v++) {
+        const rdp_color color = pipeline_rgba5551_to_color((uint16_t)v);
+        vi_rgba5551_table[v] = (sr_rgba8){color.r, color.g, color.b, color.a};
+    }
+    vi_rgba5551_table_ready = true;
+}
+
+/* Plan is VI_SCANOUT_READY, so every address touched here was proven in range
+ * during vi_build_scanout_plan(); use the unchecked fast accessors. */
+static void decode_row(const vi_scanout_plan *plan,
+                       const sr_memory *memory, uint32_t source_y,
+                       sr_rgba8 *restrict row)
+{
+    const uint32_t row_base = plan->origin +
+                              source_y * plan->source_stride *
                               plan->bytes_per_pixel;
-    for (uint32_t x = 0; x < plan->source_width; x++) {
-        const uint32_t address = (uint32_t)(row_base +
-                                 (uint64_t)x * plan->bytes_per_pixel);
-        if (plan->bytes_per_pixel == 2u) {
-            uint16_t raw;
-            if (!sr_memory_read_be16(memory, address, &raw))
-                return SR_ERROR_INVALID_ARGUMENT;
-            const rdp_color color = pipeline_rgba5551_to_color(raw);
-            row[x] = (sr_rgba8){color.r, color.g, color.b, color.a};
-        } else {
-            uint32_t raw;
-            if (!sr_memory_read_be32(memory, address, &raw))
-                return SR_ERROR_INVALID_ARGUMENT;
+    const uint32_t width = plan->source_width;
+    if (plan->bytes_per_pixel == 2u) {
+        const sr_rgba8 *restrict table = vi_rgba5551_table;
+        for (uint32_t x = 0; x < width; x++) {
+            const uint16_t raw = sr_memory_read_be16_fast(memory,
+                                                          row_base + x * 2u);
+            row[x] = table[raw];
+        }
+    } else {
+        for (uint32_t x = 0; x < width; x++) {
+            const uint32_t raw = sr_memory_read_be32_fast(memory,
+                                                         row_base + x * 4u);
             row[x] = (sr_rgba8){(uint8_t)(raw >> 24), (uint8_t)(raw >> 16),
                                 (uint8_t)(raw >> 8), (uint8_t)raw};
         }
     }
-    return SR_OK;
 }
 
-static sr_result get_cached_row(vi_row_cache *cache,
-                                const vi_scanout_plan *plan,
-                                const sr_memory *memory, uint32_t source_y,
-                                const sr_rgba8 **row)
+static const sr_rgba8 *get_cached_row(vi_row_cache *cache,
+                                      const vi_scanout_plan *plan,
+                                      const sr_memory *memory,
+                                      uint32_t source_y)
 {
     for (uint32_t slot = 0; slot < 2; slot++) {
-        if (cache->valid[slot] && cache->row_index[slot] == source_y) {
-            *row = cache->rows[slot];
-            return SR_OK;
-        }
+        if (cache->valid[slot] && cache->row_index[slot] == source_y)
+            return cache->rows[slot];
     }
     const uint32_t slot = cache->next_slot++ & 1u;
-    const sr_result result = decode_row(plan, memory, source_y,
-                                        cache->rows[slot]);
-    if (result != SR_OK) return result;
+    decode_row(plan, memory, source_y, cache->rows[slot]);
     cache->valid[slot] = true;
     cache->row_index[slot] = source_y;
-    *row = cache->rows[slot];
-    return SR_OK;
+    return cache->rows[slot];
 }
 
-static sr_rgba8 lerp_color(sr_rgba8 a, sr_rgba8 b, uint32_t fraction)
+/* Blend all four channels at once via SWAR: result = (a*(32-f) + b*f + 16) >> 5.
+ * With f in [0,31] every 8-bit lane stays <= 255*32 = 8160, so two channels
+ * pack safely into the 16-bit lanes of a 32-bit word with no cross-lane carry. */
+static inline sr_rgba8 lerp_color(sr_rgba8 a, sr_rgba8 b, uint32_t fraction)
 {
-#define LERP(c) ((uint8_t)((uint32_t)a.c + \
-    (((int32_t)b.c - (int32_t)a.c) * (int32_t)fraction + 16) / 32))
-    const sr_rgba8 result = {LERP(r), LERP(g), LERP(b), LERP(a)};
-#undef LERP
+    uint32_t av, bv;
+    memcpy(&av, &a, 4);
+    memcpy(&bv, &b, 4);
+    const uint32_t inv = 32u - fraction;
+    const uint32_t lo = ((av & 0x00ff00ffu) * inv +
+                         (bv & 0x00ff00ffu) * fraction + 0x00100010u) >> 5;
+    const uint32_t hi = (((av >> 8) & 0x00ff00ffu) * inv +
+                         ((bv >> 8) & 0x00ff00ffu) * fraction + 0x00100010u) >> 5;
+    const uint32_t rv = (lo & 0x00ff00ffu) | ((hi & 0x00ff00ffu) << 8);
+    sr_rgba8 result;
+    memcpy(&result, &rv, 4);
     return result;
 }
 
@@ -221,42 +239,42 @@ sr_result vi_execute_scanout(const vi_scanout_plan *plan,
         height != plan->output_height || stride < width)
         return SR_ERROR_INVALID_ARGUMENT;
 
+    if (plan->bytes_per_pixel == 2u && !vi_rgba5551_table_ready)
+        vi_build_rgba5551_table();
+
     vi_row_cache cache;
     memset(&cache, 0, sizeof(cache));
     const bool interpolate = plan->aa_mode != VI_AA_REPLICATE;
+    const uint32_t source_width = plan->source_width;
 
     for (uint32_t y = 0; y < height; y++) {
         const vi_y_sample ys = plan->y_samples[y];
-        const sr_rgba8 *row0;
-        const sr_rgba8 *row1 = NULL;
-        sr_result result = get_cached_row(&cache, plan, memory,
-                                          ys.source_y, &row0);
-        if (result != SR_OK) return result;
-        if (interpolate && ys.fraction) {
-            result = get_cached_row(&cache, plan, memory,
-                                    ys.source_y + 1u, &row1);
-            if (result != SR_OK) return result;
+        const sr_rgba8 *restrict row0 = get_cached_row(&cache, plan, memory,
+                                                       ys.source_y);
+        const sr_rgba8 *restrict row1 = (interpolate && ys.fraction) ?
+            get_cached_row(&cache, plan, memory, ys.source_y + 1u) : NULL;
+        sr_rgba8 *restrict destination = out->pixels + y * stride;
+
+        if (!interpolate) {
+            /* Point sampling: straight gather, no per-pixel branching. */
+            for (uint32_t x = 0; x < width; x++)
+                destination[x] = row0[plan->x_samples[x].source_x];
+            continue;
         }
 
-        sr_rgba8 *destination = out->pixels + y * stride;
+        const uint32_t y_fraction = ys.fraction;
         for (uint32_t x = 0; x < width; x++) {
             const vi_x_sample xs = plan->x_samples[x];
-            sr_rgba8 color = row0[xs.source_x];
-            if (interpolate && xs.fraction) {
-                const uint32_t next_x = xs.source_x + 1u < plan->source_width ?
-                                        xs.source_x + 1u : xs.source_x;
-                color = lerp_color(color, row0[next_x],
-                                   xs.fraction);
-            }
+            const uint32_t next_x = xs.source_x + 1u < source_width ?
+                                    xs.source_x + 1u : xs.source_x;
+            sr_rgba8 color = xs.fraction ?
+                lerp_color(row0[xs.source_x], row0[next_x], xs.fraction) :
+                row0[xs.source_x];
             if (row1) {
-                sr_rgba8 lower = row1[xs.source_x];
-                if (interpolate && xs.fraction) {
-                    const uint32_t next_x = xs.source_x + 1u < plan->source_width ?
-                                            xs.source_x + 1u : xs.source_x;
-                    lower = lerp_color(lower, row1[next_x],
-                                       xs.fraction);
-                }
-                color = lerp_color(color, lower, ys.fraction);
+                const sr_rgba8 lower = xs.fraction ?
+                    lerp_color(row1[xs.source_x], row1[next_x], xs.fraction) :
+                    row1[xs.source_x];
+                color = lerp_color(color, lower, y_fraction);
             }
             destination[x] = color;
         }
