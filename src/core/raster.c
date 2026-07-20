@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2026 PixelMechanic0
+ * Licensed under the MIT License.
+ *
+ * Project: https://github.com/PixelMechanic0/softrdp
+ */
+
 #include "raster.h"
 
 #include "framebuffer.h"

@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2026 PixelMechanic0
+ * Licensed under the MIT License.
+ *
+ * Project: https://github.com/PixelMechanic0/softrdp
+ */
+
 #include "blender.h"
 
 static uint8_t compile_cycle(const rdp_blender_cycle *cycle)
