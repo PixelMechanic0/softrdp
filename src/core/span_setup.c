@@ -73,7 +73,9 @@ void pipeline_setup_triangle_span(const rdp_primitive_state *primitive,
                                                   y);
     }
 
-    if (decoded->has_texture && primitive->color.needs_texel0) {
+    if (decoded->has_texture &&
+        (primitive->color.needs_texel0 || primitive->color.needs_texel1 ||
+         primitive->color.needs_lod_fraction)) {
         work->s_fixed = interpolate_attribute(decoded, decoded->texture.s,
                                               decoded->texture.dsdx,
                                               decoded->texture.dsde,
