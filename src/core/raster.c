@@ -383,10 +383,15 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
     /* Copy mode advances one texture coordinate step per four-pixel copy
      * group. This scalar renderer emits one framebuffer pixel at a time, so
      * convert the command's group derivative to a per-pixel derivative. */
-    const int32_t dsdx = state->other_modes.cycle_type == RDP_CYCLE_COPY
-        ? rect_cmd->dsdx >> 2 : rect_cmd->dsdx;
-    const int32_t dtdy = rect_cmd->dtdy;
     const bool flip = rect_cmd->flip;
+    const bool copy = state->other_modes.cycle_type == RDP_CYCLE_COPY;
+    /* TexRectFlip transposes the command derivatives: command dsdx advances S
+     * vertically and command dtdy advances T horizontally.  In copy mode the
+     * horizontal derivative describes a four-pixel group. */
+    const int32_t dsdy = flip ? rect_cmd->dsdx : 0;
+    const int32_t dtdx = flip ? (copy ? rect_cmd->dtdy >> 2 : rect_cmd->dtdy) : 0;
+    const int32_t dsdx = flip ? 0 : (copy ? rect_cmd->dsdx >> 2 : rect_cmd->dsdx);
+    const int32_t dtdy = flip ? 0 : rect_cmd->dtdy;
     
     raster_rect rect = {
         .x0 = rect_cmd->x0,
@@ -413,10 +418,8 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
     for (uint32_t y = rect.y0; y <= rect.y1; y++) {
         const int32_t dx = (int32_t)(rect.x0 - base_x);
         const int32_t dy = (int32_t)(y - base_y);
-        const int32_t s_fixed = s0 + (flip ? dy * dtdy : dx * dsdx);
-        const int32_t t_fixed = t0 + (flip ? dx * dsdx : dy * dtdy);
-        const int32_t span_dsdx = flip ? 0 : dsdx;
-        const int32_t span_dtdx = flip ? dsdx : 0;
+        const int32_t s_fixed = s0 + dx * dsdx + dy * dsdy;
+        const int32_t t_fixed = t0 + dx * dtdx + dy * dtdy;
         rdp_span_work work;
 
         pipeline_setup_rectangle_span((int)rect.x0,
@@ -424,8 +427,8 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
                                       (int)y,
                                       s_fixed,
                                       t_fixed,
-                                      span_dsdx,
-                                      span_dtdx,
+                                      dsdx,
+                                      dtdx,
                                       &work);
         work.texture_coord_shift = 5u;
         sr_result result = pipeline_render_span(memory, &primitive, &work);
