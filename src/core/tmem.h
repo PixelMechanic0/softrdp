@@ -571,43 +571,34 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
             return false;
         }
 
-        tmem_texel_address addr_y;
-        if (!tmem_resolve_texel_address_raw(tile, sample->stride, local_s, local_t, &addr_y)) {
-            return false;
-        }
+        const uint32_t row_base = tile->tmem + local_t * sample->stride;
+        const uint32_t row_xor = (local_t & 1u) ? 4u : 0u;
+        const uint32_t uv_addr = tmem_physical_word_byte(
+            (row_base + (local_s >> 1) * 2u) ^ row_xor) & 0x7ffu;
+        const uint32_t y_addr = (tmem_physical_byte(
+            (row_base + local_s) ^ row_xor) & 0x7ffu) | 0x800u;
+        if (uv_addr + 1u >= 0x800u || y_addr >= SR_TMEM_SIZE) return false;
 
-        tmem_texel_address addr_u;
-        if (!tmem_resolve_texel_address_raw(tile, sample->stride, local_s & ~1u, local_t, &addr_u)) {
-            return false;
-        }
+        const int32_t u = (int32_t)tmem->bytes[uv_addr] - 128;
+        const int32_t v = (int32_t)tmem->bytes[uv_addr + 1u] - 128;
+        const uint8_t y = tmem->bytes[y_addr];
 
-        tmem_texel_address addr_v;
-        if (!tmem_resolve_texel_address_raw(tile, sample->stride, local_s | 1u, local_t, &addr_v)) {
-            return false;
-        }
-
-        uint16_t word_y = ((uint16_t)tmem->bytes[addr_y.byte] << 8) | (uint16_t)tmem->bytes[addr_y.byte + 1u];
-        uint16_t word_u = ((uint16_t)tmem->bytes[addr_u.byte] << 8) | (uint16_t)tmem->bytes[addr_u.byte + 1u];
-        uint16_t word_v = ((uint16_t)tmem->bytes[addr_v.byte] << 8) | (uint16_t)tmem->bytes[addr_v.byte + 1u];
-
-        uint8_t y = (uint8_t)(word_y >> 8);
-        int32_t u = (int32_t)(word_u & 0xffu) - 128;
-        int32_t v = (int32_t)(word_v & 0xffu) - 128;
-
-        if (sample->convert_one) {
-            int32_t r_val = (int32_t)y + ((sample->convert_k0_tf * v + 0x80) >> 8);
-            int32_t g_val = (int32_t)y + ((sample->convert_k1_tf * u + sample->convert_k2_tf * v + 0x80) >> 8);
-            int32_t b_val = (int32_t)y + ((sample->convert_k3_tf * u + 0x80) >> 8);
-            color->r = r_val < 0 ? 0 : (r_val > 255 ? 255 : (uint8_t)r_val);
-            color->g = g_val < 0 ? 0 : (g_val > 255 ? 255 : (uint8_t)g_val);
-            color->b = b_val < 0 ? 0 : (b_val > 255 ? 255 : (uint8_t)b_val);
-            color->a = y;
-        } else {
+        if (sample->bilerp && !sample->convert_one) {
             color->r = (uint8_t)u;
             color->g = (uint8_t)v;
             color->b = y;
             color->a = y;
+            return true;
         }
+
+        const int32_t r_val = (int32_t)y + ((sample->convert_k0_tf * v + 0x80) >> 8);
+        const int32_t g_val = (int32_t)y +
+            ((sample->convert_k1_tf * u + sample->convert_k2_tf * v + 0x80) >> 8);
+        const int32_t b_val = (int32_t)y + ((sample->convert_k3_tf * u + 0x80) >> 8);
+        color->r = r_val < 0 ? 0 : (r_val > 255 ? 255 : (uint8_t)r_val);
+        color->g = g_val < 0 ? 0 : (g_val > 255 ? 255 : (uint8_t)g_val);
+        color->b = b_val < 0 ? 0 : (b_val > 255 ? 255 : (uint8_t)b_val);
+        color->a = y;
         return true;
     }
 
