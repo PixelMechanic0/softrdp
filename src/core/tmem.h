@@ -583,6 +583,32 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         return false;
     }
 
+    /* With TLUT disabled, CI is not rejected. The texture unit exposes the
+     * index directly, matching the corresponding raw-width RGBA wiring.
+     * Yoshi's Story uses CI8 this way while constructing auxiliary buffers. */
+    if (tile->format == RDP_FORMAT_CI) {
+        if (tile->size == RDP_SIZE_4BPP && address.bytes == 1u) {
+            const uint8_t packed = tmem->bytes[address.byte];
+            uint8_t index = address.subtexel ? (packed & 0xfu) : (packed >> 4);
+            index |= (uint8_t)(tile->palette << 4);
+            *color = (rdp_color){index, index, index, index};
+            return true;
+        }
+        if (tile->size == RDP_SIZE_8BPP && address.bytes == 1u) {
+            const uint8_t index = tmem->bytes[address.byte];
+            *color = (rdp_color){index, index, index, index};
+            return true;
+        }
+        if ((tile->size == RDP_SIZE_16BPP || tile->size == RDP_SIZE_32BPP) &&
+            address.bytes >= 2u) {
+            const uint8_t high = tmem->bytes[address.byte];
+            const uint8_t low = tmem->bytes[address.byte + 1u];
+            *color = (rdp_color){high, low, high, low};
+            return true;
+        }
+        return false;
+    }
+
     if (tile->format == RDP_FORMAT_YUV) {
         if (tile->size != RDP_SIZE_16BPP) {
             return false;
