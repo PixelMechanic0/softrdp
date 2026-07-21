@@ -220,6 +220,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.alpha_cvg_select = registers->other_modes.alpha_cvg_select;
     primitive->fragment.cvg_times_alpha = registers->other_modes.cvg_times_alpha;
     primitive->fragment.antialias = registers->other_modes.antialias;
+    primitive->fragment.color_on_cvg = registers->other_modes.color_on_cvg;
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
     primitive->fragment.rgb_dither = registers->other_modes.rgb_dither;
     primitive->tmem = tmem;

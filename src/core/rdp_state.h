@@ -276,6 +276,7 @@ typedef struct rdp_fragment_state {
     bool alpha_cvg_select;
     bool cvg_times_alpha;
     bool antialias;
+    bool color_on_cvg;
     uint8_t coverage_dest;
     uint8_t rgb_dither;
 } rdp_fragment_state;

@@ -57,9 +57,12 @@ static sr_result finish_color_lanes(sr_memory *memory,
         const bool overflow = ((packet->coverage[lane] + memory_coverage) & 8u) != 0u;
         const bool blend_enable = state->blend.force_blend ||
                                   (state->antialias && !overflow);
-        pixel = rdp_blender_evaluate(&state->blend, pixel, packet->alpha[lane],
-                                     memory_pixel.color,
-                                     (uint8_t)packet->shade[3][lane], blend_enable);
+        /* COLOR_ON_CVG affects only the final blender cycle. In two-cycle
+         * mode cycle 0 must still produce the final cycle's pixel input. */
+        pixel = rdp_blender_evaluate_coverage(
+            &state->blend, pixel, packet->alpha[lane], memory_pixel.color,
+            (uint8_t)packet->shade[3][lane], blend_enable,
+            state->color_on_cvg, overflow);
         uint32_t final_coverage;
         switch (state->coverage_dest & 3u) {
         case 0:
@@ -104,7 +107,9 @@ sr_result fragment_finish_packet(sr_memory *memory,
         if (state->cvg_times_alpha) {
             packet->alpha[lane] = (uint16_t)(((uint32_t)packet->alpha[lane] * packet->coverage[lane] + 4u) >> 3);
             packet->coverage[lane] = (uint8_t)((packet->alpha[lane] >> 5) & 0xfu);
-            if (packet->coverage[lane] == 0u) {
+            /* With antialiasing disabled the blender gates writes with the
+             * original coverage bit, not the alpha-scaled coverage count. */
+            if (state->antialias && packet->coverage[lane] == 0u) {
                 active &= (uint16_t)~bit;
                 continue;
             }

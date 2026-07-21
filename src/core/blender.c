@@ -137,6 +137,19 @@ rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
                                uint8_t shade_alpha,
                                bool blend_enable)
 {
+    return rdp_blender_evaluate_coverage(s, pixel, pixel_alpha, memory,
+                                         shade_alpha, blend_enable, false, false);
+}
+
+rdp_color rdp_blender_evaluate_coverage(const rdp_blend_state *s,
+                                        rdp_color pixel,
+                                        uint16_t pixel_alpha,
+                                        rdp_color memory,
+                                        uint8_t shade_alpha,
+                                        bool blend_enable,
+                                        bool color_on_coverage,
+                                        bool coverage_wrap)
+{
     if (!s) return pixel;
     const rdp_blender_cycle *final = &s->program.cycle[s->final_cycle];
     if (s->cycle_count == 2u) {
@@ -146,12 +159,16 @@ rdp_color rdp_blender_evaluate(const rdp_blend_state *s, rdp_color pixel,
         pixel = evaluate_cycle(s, &s->program.cycle[0],
                                (rdp_blender_op)s->program.operation[0], pixel, pixel_alpha,
                                memory, shade_alpha, false);
+        if (color_on_coverage && !coverage_wrap)
+            return color_source(final->color_b, s, pixel, memory);
         if (!blend_enable)
             return color_source(final->color_a, s, pixel, memory);
         return evaluate_cycle(s, &s->program.cycle[1],
                               (rdp_blender_op)s->program.operation[1], pixel, pixel_alpha,
                               memory, shade_alpha, true);
     }
+    if (color_on_coverage && !coverage_wrap)
+        return color_source(final->color_b, s, pixel, memory);
     if (!blend_enable)
         return color_source(final->color_a, s, pixel, memory);
     return evaluate_cycle(s, &s->program.cycle[0],
