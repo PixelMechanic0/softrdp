@@ -306,7 +306,11 @@ void pipeline_compile_triangle(rdp_primitive_state *primitive,
     }
     primitive->fragment.depth.pixel_delta = compile_depth_delta(
         &primitive->fragment.depth, triangle);
-    primitive->fill_mode = fill_mode;
+    /* FILL_TRIANGLE describes the triangle payload (no shade/texture/depth),
+     * not an unconditional framebuffer fill. In one/two-cycle mode it still
+     * runs through the configured combiner and blender. */
+    primitive->fill_mode = fill_mode &&
+                           registers->other_modes.cycle_type == RDP_CYCLE_FILL;
     primitive->span_kernel = RDP_SPAN_KERNEL_TRIANGLE;
     pipeline_compile_block_plan(primitive, triangle->has_texture,
                                 triangle->has_shade, triangle->has_depth);
