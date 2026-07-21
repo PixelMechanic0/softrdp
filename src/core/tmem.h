@@ -655,23 +655,30 @@ static inline bool tmem_sample_color(const tmem_state *tmem, const rdp_texture_s
     return tmem_fetch_color_local(tmem, sample, local_s, local_t, color);
 }
 
-static inline bool tmem_resolve_compiled_axis_fixed5(const rdp_texture_sample_state *sample,
-                                                      int32_t fixed, bool s_axis,
-                                                      uint32_t *local)
+static inline bool tmem_resolve_compiled_axis_shifted_fixed5(
+    const rdp_texture_sample_state *sample, int32_t shifted, bool s_axis,
+    uint32_t *local)
 {
     if (!sample || !local || !sample->width || !sample->height || !sample->stride) return false;
     const rdp_tile *tile = &sample->tile;
-    const uint8_t shift = s_axis ? tile->shift_s : tile->shift_t;
     const int32_t origin = (int32_t)(s_axis ? tile->sl : tile->tl) << 3;
     const uint32_t bound_lo = s_axis ? sample->bounds.sl : sample->bounds.tl;
     const uint32_t bound_hi = s_axis ? sample->bounds.sh : sample->bounds.th;
     const uint32_t extent = s_axis ? sample->width : sample->height;
     const uint8_t mask = s_axis ? tile->mask_s : tile->mask_t;
-    const int32_t relative = fixed5_floor_to_texel(
-        shift_tile_coord_fixed5(fixed, shift) - origin);
+    const int32_t relative = fixed5_floor_to_texel(shifted - origin);
     return resolve_tile_axis(relative, 0, bound_hi >= bound_lo ? (int32_t)(bound_hi - bound_lo) : 0,
                              extent, (s_axis ? tile->clamp_s : tile->clamp_t) != 0 || mask == 0,
                              (s_axis ? tile->mirror_s : tile->mirror_t) != 0, mask, local);
+}
+
+static inline bool tmem_resolve_compiled_axis_fixed5(const rdp_texture_sample_state *sample,
+                                                      int32_t fixed, bool s_axis,
+                                                      uint32_t *local)
+{
+    const uint8_t shift = s_axis ? sample->tile.shift_s : sample->tile.shift_t;
+    return tmem_resolve_compiled_axis_shifted_fixed5(
+        sample, shift_tile_coord_fixed5(fixed, shift), s_axis, local);
 }
 
 static inline bool tmem_resolve_compiled_coord_fixed5(const rdp_texture_sample_state *sample,
@@ -767,9 +774,11 @@ static inline bool tmem_sample_compact_bilerp_fixed5(const tmem_state *tmem,
 {
     uint32_t s0, t0, s1, t1;
     if (!color || !tmem_resolve_compiled_axis_fixed5(sample, s_fixed, true, &s0) ||
-        !tmem_resolve_compiled_axis_fixed5(sample, s_fixed + 32, true, &s1) ||
+        !tmem_resolve_compiled_axis_shifted_fixed5(sample,
+            shift_tile_coord_fixed5(s_fixed, sample->tile.shift_s) + 32, true, &s1) ||
         !tmem_resolve_compiled_axis_fixed5(sample, t_fixed, false, &t0) ||
-        !tmem_resolve_compiled_axis_fixed5(sample, t_fixed + 32, false, &t1))
+        !tmem_resolve_compiled_axis_shifted_fixed5(sample,
+            shift_tile_coord_fixed5(t_fixed, sample->tile.shift_t) + 32, false, &t1))
         return false;
     const rdp_tile *tile = &sample->tile;
     const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed, tile->shift_s);
@@ -815,9 +824,11 @@ static inline bool tmem_sample_rgba16_bilerp_fixed5(const tmem_state *tmem,
 {
     uint32_t s0, t0, s1, t1;
     if (!color || !tmem_resolve_compiled_axis_fixed5(sample, s_fixed, true, &s0) ||
-        !tmem_resolve_compiled_axis_fixed5(sample, s_fixed + 32, true, &s1) ||
+        !tmem_resolve_compiled_axis_shifted_fixed5(sample,
+            shift_tile_coord_fixed5(s_fixed, sample->tile.shift_s) + 32, true, &s1) ||
         !tmem_resolve_compiled_axis_fixed5(sample, t_fixed, false, &t0) ||
-        !tmem_resolve_compiled_axis_fixed5(sample, t_fixed + 32, false, &t1))
+        !tmem_resolve_compiled_axis_shifted_fixed5(sample,
+            shift_tile_coord_fixed5(t_fixed, sample->tile.shift_t) + 32, false, &t1))
         return false;
     const rdp_tile *tile = &sample->tile;
     const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed, tile->shift_s);
@@ -917,8 +928,8 @@ static inline uint16_t tmem_sample_rgba16_bilerp_block(
 
         const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed[lane], shift_s);
         const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed[lane], shift_t);
-        const int32_t shifted_s1 = shift_tile_coord_fixed5(s_fixed[lane] + 32, shift_s);
-        const int32_t shifted_t1 = shift_tile_coord_fixed5(t_fixed[lane] + 32, shift_t);
+        const int32_t shifted_s1 = shifted_s + 32;
+        const int32_t shifted_t1 = shifted_t + 32;
         uint32_t s0, s1, t0, t1;
         if (!resolve_tile_axis(fixed5_floor_to_texel(shifted_s - origin_s), 0,
                                hi_s, extent_s, clamp_s, mirror_s, mask_s, &s0) ||
@@ -1089,8 +1100,8 @@ static inline uint16_t tmem_sample_compact_bilerp_block(
 
         const int32_t shifted_s = shift_tile_coord_fixed5(s_fixed[lane], shift_s);
         const int32_t shifted_t = shift_tile_coord_fixed5(t_fixed[lane], shift_t);
-        const int32_t shifted_s1 = shift_tile_coord_fixed5(s_fixed[lane] + 32, shift_s);
-        const int32_t shifted_t1 = shift_tile_coord_fixed5(t_fixed[lane] + 32, shift_t);
+        const int32_t shifted_s1 = shifted_s + 32;
+        const int32_t shifted_t1 = shifted_t + 32;
         uint32_t s0, s1, t0, t1;
         if (!resolve_tile_axis(fixed5_floor_to_texel(shifted_s - origin_s), 0,
                                hi_s, extent_s, clamp_s, mirror_s, mask_s, &s0) ||
@@ -1202,8 +1213,8 @@ static inline bool tmem_sample_bilerp_compiled_fixed5(const tmem_state *tmem,
         const uint32_t frac_s = (uint32_t)rel_s & 31u;
         const uint32_t frac_t = (uint32_t)rel_t & 31u;
 
-        if (tmem_resolve_compiled_axis_fixed5(sample, s_fixed + 32, true, &local_s1) &&
-            tmem_resolve_compiled_axis_fixed5(sample, t_fixed + 32, false, &local_t1) &&
+        if (tmem_resolve_compiled_axis_shifted_fixed5(sample, shifted_s + 32, true, &local_s1) &&
+            tmem_resolve_compiled_axis_shifted_fixed5(sample, shifted_t + 32, false, &local_t1) &&
             tmem_fetch_color_local(tmem, sample, local_s, local_t, &c00) &&
             tmem_fetch_color_local(tmem, sample, local_s1, local_t, &c10) &&
             tmem_fetch_color_local(tmem, sample, local_s, local_t1, &c01) &&

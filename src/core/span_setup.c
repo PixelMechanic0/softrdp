@@ -15,13 +15,18 @@ static int32_t interpolate_attribute(const raster_decoded_triangle *decoded,
     const bool do_offset = sign_dxhdy == decoded->position.flip;
     const int y_base = decoded->position.yh >> 2;
     const int dy = y - y_base;
-    int64_t xh = (int64_t)decoded->position.xh + ((int64_t)dy * (int64_t)decoded->position.dxhdy);
+    const int ldflag = do_offset ? 3 : 0;
+    const int subpixel_steps = (y << 2) + ldflag - (decoded->position.yh & ~3);
+    /* The edge walker advances X at quarter-pixel precision and truncates the
+     * slope on every step. A direct dy*dxhdy reconstruction can cross a texel
+     * boundary even when the covered pixels are otherwise identical. */
+    int64_t xh = (decoded->position.xh & ~1) +
+                 (int64_t)subpixel_steps * ((decoded->position.dxhdy >> 2) & ~1);
     int32_t diff = 0;
 
     if (do_offset) {
         const int32_t ddeh = dde & ~0x1ff;
         const int32_t ddyh = ddy & ~0x1ff;
-        xh += (int64_t)3 * (int64_t)decoded->position.dxhdy / 4;
         diff = ddeh - (ddeh >> 2) - ddyh + (ddyh >> 2);
     }
 

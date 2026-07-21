@@ -525,6 +525,9 @@ static void setup_triangle_full_block(sr_memory *memory,
     const uint32_t first_color_address = primitive->framebuffer.color_image.address +
                                          first_pixel * primitive->framebuffer.bytes_per_pixel;
     const raster_decoded_triangle *decoded = &primitive->triangle;
+    const int32_t dsdx = decoded->texture.dsdx & ~0x1f;
+    const int32_t dtdx = decoded->texture.dtdx & ~0x1f;
+    const int32_t dwdx = decoded->texture.dwdx & ~0x1f;
     const int32_t dr[4] = { decoded->shade.drdx & ~0x1f, decoded->shade.dgdx & ~0x1f,
                             decoded->shade.dbdx & ~0x1f, decoded->shade.dadx & ~0x1f };
     const int32_t base[4] = { cursor->shade.r, cursor->shade.g, cursor->shade.b, cursor->shade.a };
@@ -536,12 +539,9 @@ static void setup_triangle_full_block(sr_memory *memory,
          * different coverage centroids creates unstable seam comparisons. */
         block->depth_fixed[lane] = cursor->depth_fixed +
             (int64_t)lane * decoded->depth.dzdx;
-        const int32_t s = (int32_t)((uint32_t)cursor->s_fixed +
-            lane * (uint32_t)decoded->texture.dsdx);
-        const int32_t t = (int32_t)((uint32_t)cursor->t_fixed +
-            lane * (uint32_t)decoded->texture.dtdx);
-        const int32_t w = (int32_t)((uint32_t)cursor->w_fixed +
-            lane * (uint32_t)decoded->texture.dwdx);
+        const int32_t s = (int32_t)((uint32_t)cursor->s_fixed + lane * (uint32_t)dsdx);
+        const int32_t t = (int32_t)((uint32_t)cursor->t_fixed + lane * (uint32_t)dtdx);
+        const int32_t w = (int32_t)((uint32_t)cursor->w_fixed + lane * (uint32_t)dwdx);
         block->s[lane] = s;
         block->t[lane] = t;
         block->w[lane] = w;
@@ -553,10 +553,10 @@ static void setup_triangle_full_block(sr_memory *memory,
     }
     if (decoded->has_depth) cursor->depth_fixed += (int64_t)count * decoded->depth.dzdx;
     if (primitive->block_plan.stages & RDP_BLOCK_STAGE_TEXTURE) {
-        cursor->s_fixed = (int32_t)((uint32_t)cursor->s_fixed + count * (uint32_t)decoded->texture.dsdx);
-        cursor->t_fixed = (int32_t)((uint32_t)cursor->t_fixed + count * (uint32_t)decoded->texture.dtdx);
+        cursor->s_fixed = (int32_t)((uint32_t)cursor->s_fixed + count * (uint32_t)dsdx);
+        cursor->t_fixed = (int32_t)((uint32_t)cursor->t_fixed + count * (uint32_t)dtdx);
         if (primitive->block_plan.coordinates == RDP_BLOCK_COORD_PERSPECTIVE)
-            cursor->w_fixed = (int32_t)((uint32_t)cursor->w_fixed + count * (uint32_t)decoded->texture.dwdx);
+            cursor->w_fixed = (int32_t)((uint32_t)cursor->w_fixed + count * (uint32_t)dwdx);
     }
     if (decoded->has_shade) {
         cursor->shade.r = (int32_t)((uint32_t)cursor->shade.r + count * (uint32_t)dr[0]);
@@ -599,12 +599,8 @@ static void setup_triangle_edge_block(sr_memory *memory,
         }
         if (coverage.count == 8u) continue;
 
-        block->s[lane] = coverage_sample_adjust(block->s[lane], decoded->texture.dsdx,
-            decoded->texture.dsdy, &coverage);
-        block->t[lane] = coverage_sample_adjust(block->t[lane], decoded->texture.dtdx,
-            decoded->texture.dtdy, &coverage);
-        block->w[lane] = coverage_sample_adjust(block->w[lane], decoded->texture.dwdx,
-            decoded->texture.dwdy, &coverage);
+        /* Texture coordinates remain at the pixel position. The RDP applies
+         * coverage-centroid correction to shade and Z only. */
         for (uint32_t component = 0; component < 4u; component++) {
             const int32_t interpolated = (int32_t)((uint32_t)shade_base[component] +
                 lane * (uint32_t)shade_dx[component]);
@@ -716,16 +712,16 @@ sr_result pipeline_render_triangle_span(sr_memory *memory,
                 int32_t raw_y_s[RDP_PACKET_LANES], raw_y_t[RDP_PACKET_LANES];
                 int32_t raw_w[RDP_PACKET_LANES], raw_y_w[RDP_PACKET_LANES];
                 for (uint32_t lane = 0; lane < count; lane++) {
-                    raw_s[lane] = (int32_t)((uint32_t)block.s[lane] + (uint32_t)decoded->texture.dsdx);
-                    raw_t[lane] = (int32_t)((uint32_t)block.t[lane] + (uint32_t)decoded->texture.dtdx);
-                    raw_w[lane] = (int32_t)((uint32_t)block.w[lane] + (uint32_t)decoded->texture.dwdx);
+                    raw_s[lane] = (int32_t)((uint32_t)block.s[lane] + (uint32_t)(decoded->texture.dsdx & ~0x1f));
+                    raw_t[lane] = (int32_t)((uint32_t)block.t[lane] + (uint32_t)(decoded->texture.dtdx & ~0x1f));
+                    raw_w[lane] = (int32_t)((uint32_t)block.w[lane] + (uint32_t)(decoded->texture.dwdx & ~0x1f));
                     if (color_pipeline->cycle_type == RDP_CYCLE_1) {
                         raw_y_s[lane] = (int32_t)((uint32_t)block.s[lane] +
-                            2u * (uint32_t)decoded->texture.dsdx);
+                            2u * (uint32_t)(decoded->texture.dsdx & ~0x1f));
                         raw_y_t[lane] = (int32_t)((uint32_t)block.t[lane] +
-                            2u * (uint32_t)decoded->texture.dtdx);
+                            2u * (uint32_t)(decoded->texture.dtdx & ~0x1f));
                         raw_y_w[lane] = (int32_t)((uint32_t)block.w[lane] +
-                            2u * (uint32_t)decoded->texture.dwdx);
+                            2u * (uint32_t)(decoded->texture.dwdx & ~0x1f));
                     } else {
                         raw_y_s[lane] = (int32_t)((uint32_t)block.s[lane] + (uint32_t)decoded->texture.dsdy);
                         raw_y_t[lane] = (int32_t)((uint32_t)block.t[lane] + (uint32_t)decoded->texture.dtdy);
