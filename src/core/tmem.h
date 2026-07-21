@@ -224,6 +224,12 @@ static inline bool tmem_tile_sample_layout(const tmem_state *tmem,
         return false;
     }
 
+    /* SetTile.line belongs to the render tile and is authoritative for
+     * sampling. A load may have used another tile index, so per-load layout
+     * metadata for this index can be stale even though TMEM itself is valid. */
+    if (tile->line != 0)
+        *stride = tile->line;
+
     return *stride != 0;
 }
 
