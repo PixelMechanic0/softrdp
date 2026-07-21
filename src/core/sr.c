@@ -48,7 +48,6 @@ typedef struct sr_state_snapshot_legacy {
 
 #define DP_STATUS_XBUS_DMA 0x001u
 #define DP_INTERRUPT 0x20u
-#define MAX_RDP_LIST_BYTES (1024u * 1024u)
 
 static uint32_t read_reg(uint32_t *const *regs, uint32_t index)
 {
@@ -298,12 +297,6 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
     if (end <= current) {
         return SR_OK;
     }
-    if (end - current > MAX_RDP_LIST_BYTES) {
-        ctx->debug.last_result = SR_ERROR_BAD_COMMAND;
-        finish_rdp_list(ctx);
-        return SR_ERROR_BAD_COMMAND;
-    }
-
     if (ctx->cmd_words_loaded == 0u) {
         uint32_t first_word;
         if (read_command_word(ctx, xbus_dma, current >> 2, &first_word)) {
@@ -332,7 +325,11 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
                     raise_dp_interrupt(ctx);
                 }
                 finish_rdp_list(ctx);
-                return result;
+                /* A complete, known command owns no command-stream state.
+                 * A local emulation limitation must not turn it into a DP
+                 * protocol failure. There cannot be a following SyncFull in
+                 * this single-command case, so acknowledge it as consumed. */
+                return SR_OK;
             }
         }
     }
@@ -395,9 +392,12 @@ static sr_result sr_process_rdp_list_internal(sr_context *ctx)
         sr_result result = execute_rdp_command(ctx, &cmd);
 
         if (result != SR_OK) {
+            /* The command was structurally valid and has been consumed. Keep
+             * its result for diagnostics, but continue to synchronization
+             * commands. Stopping here can suppress SyncFull and deadlock the
+             * emulated CPU. This branch is per command, never per fragment. */
             ctx->debug.last_result = result;
-            finish_rdp_list(ctx);
-            return result;
+            continue;
         }
 
         if (cmd.id == RDP_CMD_SYNC_FULL) {

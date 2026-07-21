@@ -449,6 +449,17 @@ static sr_result tmem_load_tile_internal(tmem_state *tmem,
     const uint32_t tile_index = cmd->decoded.load.tile_index;
     const rdp_tile *tile = &state->tiles[tile_index];
 
+    /* The RDP load edgewalker accepts inverted bounds. They produce no valid
+     * spans, so the command is an empty load rather than an execution error.
+     * Games use this naturally after clipping; rejecting it can skip a later
+     * SyncFull and leave the emulated CPU waiting forever. */
+    if (cmd->id != RDP_CMD_LOAD_BLOCK &&
+        (cmd->decoded.load.sh < cmd->decoded.load.sl ||
+         (cmd->id == RDP_CMD_LOAD_TILE &&
+          cmd->decoded.load.th < cmd->decoded.load.tl))) {
+        return SR_OK;
+    }
+
     if (cmd->id == RDP_CMD_LOAD_TLUT) {
         return load_tlut(tmem, memory, state, tile, cmd);
     }

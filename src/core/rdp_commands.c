@@ -39,7 +39,10 @@ uint8_t rdp_command_word_count(rdp_command_id id)
         [RDP_CMD_SET_FILL_COLOR] = 2,                 [RDP_CMD_SET_FOG_COLOR] = 2,
         [RDP_CMD_SET_BLEND_COLOR] = 2,                [RDP_CMD_SET_PRIM_COLOR] = 2
     };
-    return id < 64 ? lengths[id] : 0;
+    /* Every reserved RDP opcode still occupies one 64-bit command word.
+     * Consuming it preserves command-stream alignment and allows a following
+     * SyncFull to run */
+    return id < 64 ? (lengths[id] ? lengths[id] : 2u) : 0u;
 }
 
 bool rdp_command_is_draw(rdp_command_id id)
