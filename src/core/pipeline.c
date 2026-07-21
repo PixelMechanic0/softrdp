@@ -331,8 +331,15 @@ static void sample_triangle_texture_block(
                 : resolve_lod(primitive, s, t, next_s[lane], next_t[lane],
                     next_y_s[lane], next_y_t[lane], lod_clamp[lane]);
             block->lod_fraction[lane] = lod.fraction;
-            texture0 = &primitive->lod_textures[lod.tile0];
-            texture1 = &primitive->lod_textures_cycle1[lod.tile1];
+            /* LOD_FRACTION can be consumed by the combiner while texture LOD
+             * selection itself is disabled. In that mode the two-cycle
+             * texture pipeline still samples the primitive's base tile pair;
+             * only the fraction is computed. Selecting both entries from the
+             * LOD arrays aliases TEXEL1 to tile 0 and loses the tile-1 sample. */
+            if (primitive->texture_lod) {
+                texture0 = &primitive->lod_textures[lod.tile0];
+                texture1 = &primitive->lod_textures_cycle1[lod.tile1];
+            }
         }
         rdp_color texel0, texel1;
         const bool ok0 = !color->needs_texel0 ||
