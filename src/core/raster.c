@@ -413,16 +413,10 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
     for (uint32_t y = rect.y0; y <= rect.y1; y++) {
         const int32_t dx = (int32_t)(rect.x0 - base_x);
         const int32_t dy = (int32_t)(y - base_y);
-        int32_t s_fixed = s0 + (flip ? dy * dtdy : dx * dsdx);
-        int32_t t_fixed = t0 + (flip ? dx * dsdx : dy * dtdy);
+        const int32_t s_fixed = s0 + (flip ? dy * dtdy : dx * dsdx);
+        const int32_t t_fixed = t0 + (flip ? dx * dsdx : dy * dtdy);
         const int32_t span_dsdx = flip ? 0 : dsdx;
         const int32_t span_dtdx = flip ? dsdx : 0;
-        if (state->other_modes.cycle_type == RDP_CYCLE_2) {
-            /* The two-cycle span pipeline consumes rectangle texture
-             * coordinates two horizontal steps ahead of the write position. */
-            s_fixed -= 2 * span_dsdx;
-            t_fixed -= 2 * span_dtdx;
-        }
         rdp_span_work work;
 
         pipeline_setup_rectangle_span((int)rect.x0,
