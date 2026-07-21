@@ -143,7 +143,8 @@ static inline bool tmem_resolve_rgba16_address_raw(const rdp_tile *tile,
      * model that matters for nearest RGBA16 sampling.
      */
     const uint32_t logical = tile->tmem + local_t * stride + local_s * 2u;
-    address->byte = tmem_physical_word_byte(logical ^ ((local_t & 1u) ? 4u : 0u));
+    address->byte = tmem_physical_word_byte(
+        (logical ^ ((local_t & 1u) ? 4u : 0u)) & 0xfffu);
     address->byte2 = 0;
     address->subtexel = 0;
     address->bytes = 2;
@@ -246,13 +247,15 @@ static inline bool tmem_resolve_texel_address_raw(const rdp_tile *tile,
     const uint32_t row_xor = (local_t & 1u) ? 4u : 0u;
     switch (tile->size) {
     case RDP_SIZE_4BPP:
-        address->byte = tmem_physical_byte(tile->tmem + local_t * stride + ((local_s >> 1) ^ row_xor));
+        address->byte = tmem_physical_byte(
+            (tile->tmem + local_t * stride + ((local_s >> 1) ^ row_xor)) & 0xfffu);
         address->byte2 = 0;
         address->subtexel = (uint8_t)(local_s & 1u);
         address->bytes = 1;
         return address->byte < SR_TMEM_SIZE;
     case RDP_SIZE_8BPP:
-        address->byte = tmem_physical_byte(tile->tmem + local_t * stride + (local_s ^ row_xor));
+        address->byte = tmem_physical_byte(
+            (tile->tmem + local_t * stride + (local_s ^ row_xor)) & 0xfffu);
         address->byte2 = 0;
         address->subtexel = 0;
         address->bytes = 1;
@@ -567,6 +570,14 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
         if (tile->size == RDP_SIZE_8BPP && address.bytes == 1) {
             const uint8_t intensity = tmem->bytes[address.byte];
             *color = (rdp_color){ intensity, intensity, intensity, intensity };
+            return true;
+        }
+        /* The RDP does not reject the nominally invalid I16 encoding. Its
+         * texture fetch unit exposes the two bytes as R,G,B,A = hi,lo,hi,lo. */
+        if (tile->size == RDP_SIZE_16BPP && address.bytes == 2) {
+            const uint8_t high = tmem->bytes[address.byte];
+            const uint8_t low = tmem->bytes[address.byte + 1u];
+            *color = (rdp_color){ high, low, high, low };
             return true;
         }
         return false;

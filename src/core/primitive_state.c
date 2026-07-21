@@ -98,6 +98,10 @@ static void pipeline_compile_texture(rdp_texture_sample_state *texture,
     texture->perspective = registers->other_modes.perspective;
     texture->tlut_enable = registers->other_modes.tlut_enable;
     texture->tlut_ia = registers->other_modes.tlut_ia;
+    /* TLUT lookup is a texture-unit property, not a rectangle special case.
+     * CI16/IA16-style encodings use the upper fetched byte as their index. */
+    texture->tlut_wide_index = texture->tlut_enable &&
+                               texture->tile.size == RDP_SIZE_16BPP;
     texture->bilerp = second_cycle ? registers->other_modes.bilerp1
                                    : registers->other_modes.bilerp0;
     texture->sample_quad = registers->other_modes.sample_quad;
@@ -326,10 +330,6 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
     }
 
     pipeline_compile_common(primitive, registers, tmem, tile_index);
-    /* Texture rectangles are also used for IA16 framebuffer effects. With
-     * TLUT enabled their upper texel byte is the palette index. */
-    primitive->texture.tlut_wide_index = true;
-    primitive->texture_cycle1.tlut_wide_index = true;
     primitive->span_kernel = registers->other_modes.cycle_type == RDP_CYCLE_COPY
         ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
         : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
