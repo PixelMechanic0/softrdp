@@ -45,6 +45,11 @@ typedef struct vi_scanout_plan {
     uint32_t bytes_per_pixel;
     uint32_t output_width;
     uint32_t output_height;
+    /* Columns [active_x_begin, active_x_end) carry framebuffer content; the
+     * guard-band columns outside are blanked, as the hardware VI blanks the
+     * left/right border where its filter window would read out of bounds. */
+    uint32_t active_x_begin;
+    uint32_t active_x_end;
     uint32_t display_width;
     uint32_t display_height;
     uint32_t aa_mode;

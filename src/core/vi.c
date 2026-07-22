@@ -79,11 +79,17 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
 
     h_start -= h_offset;
     h_end -= h_offset;
+    bool left_clamp = false;
+    bool right_clamp = false;
     if (h_start < 0) {
         x_start += x_add * (uint32_t)(-h_start);
         h_start = 0;
+        left_clamp = true;
     }
-    if (h_end > (int32_t)VI_MAX_OUTPUT_WIDTH) h_end = VI_MAX_OUTPUT_WIDTH;
+    if (h_end > (int32_t)VI_MAX_OUTPUT_WIDTH) {
+        h_end = VI_MAX_OUTPUT_WIDTH;
+        right_clamp = true;
+    }
 
     int32_t output_width = h_end - h_start;
     int32_t output_height = (v_end - v_start) >> 1;
@@ -101,6 +107,18 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     plan->bytes_per_pixel = type == VI_TYPE_RGBA5551 ? 2u : 4u;
     plan->output_width = (uint32_t)output_width;
     plan->output_height = (uint32_t)output_height;
+    /* The VI blanks an 8-pixel left and 7-pixel right guard band unless that
+     * edge is already clamped to the screen border. This is where the filter
+     * window would sample past the framebuffer, so it also keeps the fetch from
+     * reading beyond WIDTH into the next scanline. */
+    const uint32_t left_border = left_clamp ? 0u : 8u;
+    const uint32_t right_border = right_clamp ? 0u : 7u;
+    plan->active_x_begin = left_border < plan->output_width
+        ? left_border : plan->output_width;
+    plan->active_x_end = plan->output_width > right_border
+        ? plan->output_width - right_border : 0u;
+    if (plan->active_x_end < plan->active_x_begin)
+        plan->active_x_end = plan->active_x_begin;
     plan->display_width = plan->output_width;
     plan->display_height = (uint32_t)(((uint64_t)plan->output_height * 2u *
                            VI_V_SYNC_NTSC) /
@@ -120,7 +138,11 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
         const uint32_t coordinate = x_start + x * x_add;
         plan->x_samples[x].source_x = (uint16_t)(coordinate >> 10);
         plan->x_samples[x].fraction = (uint8_t)((coordinate >> 5) & 31u);
-        if (plan->x_samples[x].source_x > max_x) max_x = plan->x_samples[x].source_x;
+        /* Only active columns are fetched, so blanked guard-band columns must
+         * not widen the source extent or the memory range check. */
+        if (x >= plan->active_x_begin && x < plan->active_x_end &&
+            plan->x_samples[x].source_x > max_x)
+            max_x = plan->x_samples[x].source_x;
     }
     for (uint32_t y = 0; y < plan->output_height; y++) {
         const uint32_t coordinate = y_start + y * y_add;
@@ -246,6 +268,11 @@ sr_result vi_execute_scanout(const vi_scanout_plan *plan,
     memset(&cache, 0, sizeof(cache));
     const bool interpolate = plan->aa_mode != VI_AA_REPLICATE;
     const uint32_t source_width = plan->source_width;
+    const sr_rgba8 border = {0, 0, 0, 0};
+    const uint32_t active_begin = plan->active_x_begin < width
+        ? plan->active_x_begin : width;
+    const uint32_t active_end = plan->active_x_end < width
+        ? plan->active_x_end : width;
 
     for (uint32_t y = 0; y < height; y++) {
         const vi_y_sample ys = plan->y_samples[y];
@@ -255,15 +282,18 @@ sr_result vi_execute_scanout(const vi_scanout_plan *plan,
             get_cached_row(&cache, plan, memory, ys.source_y + 1u) : NULL;
         sr_rgba8 *restrict destination = out->pixels + y * stride;
 
+        for (uint32_t x = 0; x < active_begin; x++) destination[x] = border;
+        for (uint32_t x = active_end; x < width; x++) destination[x] = border;
+
         if (!interpolate) {
             /* Point sampling: straight gather, no per-pixel branching. */
-            for (uint32_t x = 0; x < width; x++)
+            for (uint32_t x = active_begin; x < active_end; x++)
                 destination[x] = row0[plan->x_samples[x].source_x];
             continue;
         }
 
         const uint32_t y_fraction = ys.fraction;
-        for (uint32_t x = 0; x < width; x++) {
+        for (uint32_t x = active_begin; x < active_end; x++) {
             const vi_x_sample xs = plan->x_samples[x];
             const uint32_t next_x = xs.source_x + 1u < source_width ?
                                     xs.source_x + 1u : xs.source_x;
