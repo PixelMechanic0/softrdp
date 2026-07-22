@@ -17,6 +17,7 @@ typedef struct rdp_combiner_inputs {
     uint8_t primitive_lod_fraction;
     uint16_t k4;
     uint16_t k5;
+    uint16_t noise;
 } rdp_combiner_inputs;
 
 #define RDP_PACKET_LANES 16u

@@ -171,6 +171,7 @@ static int32_t source_component(rdp_combiner_source source,
     case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: return in->primitive_lod_fraction;
     case RDP_COMBINER_K4:               return in->k4;
     case RDP_COMBINER_K5:               return in->k5;
+    case RDP_COMBINER_NOISE:            return in->noise;
     case RDP_COMBINER_ONE:              return 0x100;
     default:                            return 0;
     }
@@ -306,6 +307,17 @@ static inline __m256i simd_load_source(uint32_t source,
     case RDP_COMBINER_PRIMITIVE_LOD_FRACTION: return _mm256_set1_epi32(state->primitive_lod_fraction);
     case RDP_COMBINER_K4: return _mm256_set1_epi32(state->convert_k4);
     case RDP_COMBINER_K5: return _mm256_set1_epi32(state->convert_k5);
+    case RDP_COMBINER_NOISE: {
+        /* Noise is a rare combiner input, so fill the eight lanes scalar rather
+         * than vectorizing the hash. Padded lanes read in-range packet data. */
+        int32_t lanes[8];
+        for (uint32_t lane = 0; lane < 8u; lane++) {
+            const uint16_t n = rdp_pixel_noise(packet->x[offset + lane], packet->y,
+                                               state->primitive_counter);
+            lanes[lane] = (int32_t)(((uint32_t)(n & 7u) << 6) | 0x20u);
+        }
+        return _mm256_loadu_si256((const __m256i *)lanes);
+    }
     case RDP_COMBINER_ONE: return _mm256_set1_epi32(0x100);
     default: return _mm256_setzero_si256();
     }
@@ -426,7 +438,9 @@ void rdp_combiner_evaluate_packet(const rdp_color_pipeline_state *state,
             .lod_fraction = packet->lod_fraction[lane],
             .primitive_lod_fraction = state->primitive_lod_fraction,
             .k4 = (uint16_t)state->convert_k4,
-            .k5 = (uint16_t)state->convert_k5
+            .k5 = (uint16_t)state->convert_k5,
+            .noise = (uint16_t)(((uint32_t)(rdp_pixel_noise(packet->x[lane], packet->y,
+                state->primitive_counter) & 7u) << 6) | 0x20u)
         };
         combiner_value combined_value = {0, 0, 0, 0};
         if (state->two_cycle) {

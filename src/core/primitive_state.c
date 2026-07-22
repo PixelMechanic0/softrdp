@@ -205,6 +205,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
                                  (tile_index + 1u) & 7u, true);
     primitive->color.convert_k4 = registers->convert_k4;
     primitive->color.convert_k5 = registers->convert_k5;
+    primitive->color.primitive_counter = registers->primitive_counter;
     primitive->fragment.blend.program = registers->blender;
     primitive->fragment.blend.fog_color = registers->fog_color;
     primitive->fragment.blend.blend_color = registers->blend_color;
@@ -212,6 +213,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.blend.force_blend = registers->other_modes.force_blend;
     primitive->fragment.blend.image_read = registers->other_modes.image_read;
     primitive->fragment.blend.alpha_compare = registers->other_modes.alpha_compare;
+    primitive->fragment.blend.alpha_compare_dither = registers->other_modes.alpha_compare_dither;
     primitive->fragment.blend.cycle_count = registers->other_modes.cycle_type == RDP_CYCLE_2 ? 2u : 1u;
     primitive->fragment.blend.final_cycle = registers->other_modes.cycle_type == RDP_CYCLE_2 ? 1u : 0u;
     primitive->fragment.blend.input_mask = registers->blender.input_mask[0];
@@ -223,6 +225,7 @@ static void pipeline_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.color_on_cvg = registers->other_modes.color_on_cvg;
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
     primitive->fragment.rgb_dither = registers->other_modes.rgb_dither;
+    primitive->fragment.alpha_dither = registers->other_modes.alpha_dither;
     primitive->tmem = tmem;
 }
 

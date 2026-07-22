@@ -336,11 +336,11 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_SHADE_TRIANGLE:
     case RDP_CMD_SHADE_ZBUFFER_TRIANGLE:
     case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
-    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  return raster_submit_triangle(memory, tmem, state, cmd);
+    case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  state->primitive_counter++; return raster_submit_triangle(memory, tmem, state, cmd);
 
     case RDP_CMD_TEXTURE_RECTANGLE:
     case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
-    case RDP_CMD_FILL_RECTANGLE:                  return raster_submit_rectangle(memory, tmem, state, cmd);
+    case RDP_CMD_FILL_RECTANGLE:                  state->primitive_counter++; return raster_submit_rectangle(memory, tmem, state, cmd);
 
     case RDP_CMD_LOAD_BLOCK: {
         rdp_tile *tile = &state->tiles[cmd->decoded.load.tile_index];

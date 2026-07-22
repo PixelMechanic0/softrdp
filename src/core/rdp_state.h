@@ -188,7 +188,36 @@ typedef struct rdp_state {
     int32_t convert_k5;
     rdp_color key_center;
     rdp_color key_scale;
+    /* Monotonic per-primitive index. Feeds the noise generator so overlapping
+     * and successive draws get independent noise, and it advances across frames
+     * on its own. */
+    uint32_t primitive_counter;
 } rdp_state;
+
+/*
+ * Stateless per-pixel noise. Hashing (x, y, primitive) instead of advancing a
+ * running seed keeps noise independent of evaluation order, so span rendering
+ * can be split across threads without changing the result. The three-way mix
+ * decorrelates all three inputs.
+ */
+static inline uint16_t rdp_pixel_noise(uint32_t x, uint32_t y, uint32_t primitive)
+{
+    const uint32_t prime = 1103515245u;
+    uint32_t a = x, b = y, c = primitive;
+    for (int round = 0; round < 3; round++) {
+        /* Update all three from the current values, not sequentially: each mixes
+         * with the next input, so a coordinate that starts in c still reaches a
+         * over the three rounds. Overwriting a before c reads it would drop the
+         * x dependence entirely (x >> 8 is 0 on screen) and leave only stripes. */
+        const uint32_t na = ((a >> 8) ^ b) * prime;
+        const uint32_t nb = ((b >> 8) ^ c) * prime;
+        const uint32_t nc = ((c >> 8) ^ a) * prime;
+        a = na;
+        b = nb;
+        c = nc;
+    }
+    return (uint16_t)(a >> 16);
+}
 
 /* Draw-local snapshots consumed by individual software pipeline stages. */
 typedef struct rdp_framebuffer_state {
@@ -255,6 +284,7 @@ typedef struct rdp_color_pipeline_state {
     bool needs_lod_fraction;
     int32_t convert_k4;
     int32_t convert_k5;
+    uint32_t primitive_counter;
 } rdp_color_pipeline_state;
 
 typedef struct rdp_blend_state {
@@ -266,6 +296,7 @@ typedef struct rdp_blend_state {
     bool force_blend;
     bool image_read;
     bool alpha_compare;
+    bool alpha_compare_dither;
     uint8_t cycle_count;
     uint8_t final_cycle;
 } rdp_blend_state;
@@ -279,6 +310,7 @@ typedef struct rdp_fragment_state {
     bool color_on_cvg;
     uint8_t coverage_dest;
     uint8_t rgb_dither;
+    uint8_t alpha_dither;
 } rdp_fragment_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)
