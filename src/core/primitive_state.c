@@ -335,9 +335,22 @@ void pipeline_compile_rectangle(rdp_primitive_state *primitive,
     }
 
     pipeline_compile_common(primitive, registers, tmem, tile_index);
-    primitive->span_kernel = registers->other_modes.cycle_type == RDP_CYCLE_COPY
-        ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
-        : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
+    const bool copy = registers->other_modes.cycle_type == RDP_CYCLE_COPY;
+    primitive->span_kernel = copy ? RDP_SPAN_KERNEL_TEXTURE_RECTANGLE_COPY
+                                  : RDP_SPAN_KERNEL_TEXTURE_RECTANGLE;
+    if (copy) {
+        /* The copy texture-coordinate pipeline does not apply clamp. Keep
+         * explicit masks, and model an unmasked axis as its full 10-bit
+         * coordinate period without changing ordinary cycle sampling. */
+        primitive->texture.tile.clamp_s = 0u;
+        primitive->texture.tile.clamp_t = 0u;
+        if (!primitive->texture.tile.mask_s) primitive->texture.tile.mask_s = 10u;
+        if (!primitive->texture.tile.mask_t) primitive->texture.tile.mask_t = 10u;
+        if (primitive->texture.tile.mask_s > 10u) primitive->texture.tile.mask_s = 10u;
+        if (primitive->texture.tile.mask_t > 10u) primitive->texture.tile.mask_t = 10u;
+        primitive->texture.width = (uint16_t)(1u << primitive->texture.tile.mask_s);
+        primitive->texture.height = (uint16_t)(1u << primitive->texture.tile.mask_t);
+    }
     pipeline_compile_block_plan(primitive, true, false, false);
 }
 
