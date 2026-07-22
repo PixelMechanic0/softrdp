@@ -70,9 +70,13 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     const int32_t h_offset = pal ? VI_H_OFFSET_PAL : VI_H_OFFSET_NTSC;
     const int32_t v_offset = pal ? VI_V_OFFSET_PAL : VI_V_OFFSET_NTSC;
 
+    /* source_stride is the row pitch, not the sampled width. A wide framebuffer
+     * can have a large stride while only a sub-region is scanned out, so the
+     * sampled extent is bounded later (max_x < VI_MAX_SOURCE_WIDTH) and the
+     * stride is validated by the final memory-range check. */
     if ((type != VI_TYPE_RGBA5551 && type != VI_TYPE_RGBA8888) ||
         origin == 0 || source_stride == 0 ||
-        source_stride > VI_MAX_SOURCE_WIDTH || x_add == 0 || y_add == 0 ||
+        x_add == 0 || y_add == 0 ||
         h_end <= h_start || v_end <= v_start) {
         return;
     }
