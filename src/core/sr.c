@@ -453,6 +453,8 @@ sr_result sr_get_vi_frame_info(sr_context *ctx, sr_vi_frame_info *info)
     info->display_width = ctx->vi_plan.display_width;
     info->display_height = ctx->vi_plan.display_height;
     info->display = ctx->vi_plan.state == VI_SCANOUT_READY;
+    info->hold = ctx->vi_plan.state == VI_SCANOUT_HOLD ||
+                 ctx->vi_plan.state == VI_SCANOUT_INVALID_MEMORY;
     return SR_OK;
 }
 

@@ -70,14 +70,20 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     const int32_t h_offset = pal ? VI_H_OFFSET_PAL : VI_H_OFFSET_NTSC;
     const int32_t v_offset = pal ? VI_V_OFFSET_PAL : VI_V_OFFSET_NTSC;
 
-    /* source_stride is the row pitch, not the sampled width. A wide framebuffer
-     * can have a large stride while only a sub-region is scanned out, so the
-     * sampled extent is bounded later (max_x < VI_MAX_SOURCE_WIDTH) and the
-     * stride is validated by the final memory-range check. */
-    if ((type != VI_TYPE_RGBA5551 && type != VI_TYPE_RGBA8888) ||
-        origin == 0 || source_stride == 0 ||
+    /* A non-RGBA pixel type is a genuine blank signal: leave state BLANK so the
+     * presenter shows black. */
+    if (type != VI_TYPE_RGBA5551 && type != VI_TYPE_RGBA8888) {
+        return;
+    }
+    /* Valid pixel type but the frame is not renderable this refresh (framebuffer
+     * or timing not fully programmed, e.g. H_START still zero). Hold the last
+     * frame rather than flashing black. source_stride is the row pitch, not the
+     * sampled width, so a wide stride is fine; the sampled extent is bounded
+     * later (max_x < VI_MAX_SOURCE_WIDTH) and validated by the memory check. */
+    if (origin == 0 || source_stride == 0 ||
         x_add == 0 || y_add == 0 ||
         h_end <= h_start || v_end <= v_start) {
+        plan->state = VI_SCANOUT_HOLD;
         return;
     }
 
@@ -183,7 +189,10 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
         if (plan->y_samples[y].source_y > max_y) max_y = plan->y_samples[y].source_y;
     }
 
-    if (max_x >= VI_MAX_SOURCE_WIDTH) return;
+    if (max_x >= VI_MAX_SOURCE_WIDTH) {
+        plan->state = VI_SCANOUT_HOLD;
+        return;
+    }
     plan->source_width = max_x + 1u;
 
     const bool interpolate = plan->aa_mode != VI_AA_REPLICATE;

@@ -13,6 +13,9 @@ typedef struct sr_vi_frame_info {
     uint32_t display_width;
     uint32_t display_height;
     bool display;
+    /* Frame not renderable this refresh but not a genuine blank: the presenter
+     * should hold the previous frame instead of showing black. */
+    bool hold;
 } sr_vi_frame_info;
 
 typedef struct sr_debug_stats {

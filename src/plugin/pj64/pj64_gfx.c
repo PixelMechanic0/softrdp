@@ -599,9 +599,15 @@ void PJ64_CALL UpdateScreen(void)
         }
 #endif
         uploaded = sr_present_upload_rgba8(&g_present, fb.pixels, fb.width, fb.height, fb.stride_pixels);
+    } else if (vi_info.hold) {
+        /* Valid pixel type but no renderable frame this refresh (e.g. H_START not
+         * programmed yet). Hold the last frame instead of flashing black: redraw
+         * the retained texture without uploading new pixels. */
+        sr_present_draw(&g_present);
+        uploaded = false;
     } else {
         /* VI scanout is authoritative. Never expose raw RDRAM as a fallback;
-         * invalid VI state and scanout errors both produce a black frame. */
+         * a genuine blank signal and scanout errors produce a black frame. */
         memset(g_frame_pixels, 0,
                g_frame_width * g_frame_height * sizeof(*g_frame_pixels));
         uploaded = sr_present_upload_rgba8(&g_present, g_frame_pixels,

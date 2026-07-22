@@ -346,8 +346,8 @@ EXPORT void CALL ShowCFB(void)
 EXPORT void CALL UpdateScreen(void)
 {
     bool valid = false;
+    sr_vi_frame_info vi_info = {0};
     if (g_context) {
-        sr_vi_frame_info vi_info;
         if (sr_get_vi_frame_info(g_context, &vi_info) == SR_OK && vi_info.display) {
             if (ensure_frame_storage(vi_info.width, vi_info.height)) {
                 sr_framebuffer out_fb;
@@ -372,7 +372,13 @@ EXPORT void CALL UpdateScreen(void)
     }
 
     if (!valid) {
-        sr_present_clear(&g_present);
+        if (vi_info.hold) {
+            /* Valid pixel type but no renderable frame this refresh (e.g. H_START
+             * not programmed yet). Hold the last frame instead of flashing black. */
+            sr_present_draw(&g_present);
+        } else {
+            sr_present_clear(&g_present);
+        }
     }
 
     if (render_callback) {

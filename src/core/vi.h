@@ -24,7 +24,11 @@ typedef struct vi_state {
 typedef enum vi_scanout_state {
     VI_SCANOUT_BLANK = 0,
     VI_SCANOUT_READY,
-    VI_SCANOUT_INVALID_MEMORY
+    VI_SCANOUT_INVALID_MEMORY,
+    /* Valid pixel type but the frame cannot be produced this refresh (e.g. the
+     * horizontal range is not programmed yet). The presenter should hold the last
+     * frame instead of flashing black */
+    VI_SCANOUT_HOLD
 } vi_scanout_state;
 
 typedef struct vi_x_sample {
