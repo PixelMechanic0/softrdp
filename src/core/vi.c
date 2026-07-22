@@ -92,10 +92,36 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     }
 
     int32_t output_width = h_end - h_start;
-    int32_t output_height = (v_end - v_start) >> 1;
+    /* Interlaced (serrate) frames hold the full image in the framebuffer while
+     * the VI scans out every other line per field. Read every source line into a
+     * full-height progressive frame instead: this shows the full vertical
+     * resolution the game rendered and removes the one-line inter-field jitter.
+     * The field's half-line origin offset is dropped so each output line maps
+     * cleanly onto one source line. */
+    const bool serrate = (vi->control & VI_CONTROL_SERRATE) != 0;
+    const uint32_t effective_y_add = serrate ? (y_add >> 1) : y_add;
+    /* The one-line offset that interleaves the two interlaced fields alternates
+     * in the low bit of V_START every frame. For a stable deinterlaced image we
+     * drop it (and the field's half-line source origin), so both fields produce
+     * identical geometry and the picture no longer jumps by a line each frame. */
+    if (serrate) {
+        v_start &= ~1;
+        /* The two interlaced fields are offset by half a field step. Nudge one
+         * field's sampling origin by half the source step (y_add/2) so both
+         * fields land on the same output rows and the progressive image stops
+         * jumping. This scales with y_add rather than a fixed constant: for a
+         * full-frame buffer (y_add ~2.0) the fields are a whole source line apart,
+         * for a per-field buffer (y_add ~1.0) half a line. Parity from V_CURRENT;
+         * flip vi_field_parity_invert if a title uses the opposite convention. */
+        const bool vi_field_parity_invert = false;
+        const uint32_t parity = (vi->current & 1u) ^ (uint32_t)vi_field_parity_invert;
+        y_start = parity ? 0u : (y_add >> 1);
+    }
+    const int32_t field_height = (v_end - v_start) >> 1;
+    int32_t output_height = serrate ? (field_height << 1) : field_height;
     v_start = (v_start - v_offset) / 2;
     if (v_start < 0) {
-        y_start += y_add * (uint32_t)(-v_start);
+        y_start += effective_y_add * (uint32_t)(-v_start);
         v_start = 0;
     }
     if (output_height > (int32_t)VI_MAX_OUTPUT_HEIGHT - v_start)
@@ -120,13 +146,15 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     if (plan->active_x_end < plan->active_x_begin)
         plan->active_x_end = plan->active_x_begin;
     plan->display_width = plan->output_width;
-    plan->display_height = (uint32_t)(((uint64_t)plan->output_height * 2u *
-                           VI_V_SYNC_NTSC) /
+    /* Progressive serrate output already contains both fields, so it must not be
+     * line-doubled for display the way a single 240p field is. */
+    plan->display_height = (uint32_t)(((uint64_t)plan->output_height *
+                           (serrate ? 1u : 2u) * VI_V_SYNC_NTSC) /
                            ((vi->v_sync & 0x3ffu) ?
                             (vi->v_sync & 0x3ffu) : VI_V_SYNC_NTSC));
     if (!plan->display_height) plan->display_height = plan->output_height;
     plan->aa_mode = (vi->control >> VI_CONTROL_AA_MODE_SHIFT) & 3u;
-    plan->serrate = (vi->control & VI_CONTROL_SERRATE) != 0;
+    plan->serrate = serrate;
     plan->gamma_enable = (vi->control & VI_CONTROL_GAMMA) != 0;
     plan->gamma_dither_enable = (vi->control & VI_CONTROL_GAMMA_DITHER) != 0;
     plan->divot_enable = (vi->control & VI_CONTROL_DIVOT) != 0;
@@ -145,7 +173,7 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
             max_x = plan->x_samples[x].source_x;
     }
     for (uint32_t y = 0; y < plan->output_height; y++) {
-        const uint32_t coordinate = y_start + y * y_add;
+        const uint32_t coordinate = y_start + y * effective_y_add;
         plan->y_samples[y].source_y = (uint16_t)(coordinate >> 10);
         plan->y_samples[y].fraction = (uint8_t)((coordinate >> 5) & 31u);
         if (plan->y_samples[y].source_y > max_y) max_y = plan->y_samples[y].source_y;
