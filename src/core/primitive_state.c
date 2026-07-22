@@ -249,8 +249,12 @@ static void pipeline_compile_block_plan(rdp_primitive_state *primitive,
     if (has_shade && (primitive->color.needs_shade ||
         (primitive->fragment.blend.input_mask & RDP_BLENDER_INPUT_SHADE_ALPHA)))
         plan->stages |= RDP_BLOCK_STAGE_SHADE;
-    if (has_texture && (primitive->color.needs_texel0 || primitive->color.needs_texel1 ||
-                        primitive->color.needs_lod_fraction)) {
+    /* The command payload only controls whether texture coordinates are
+     * supplied. The texture unit is enabled by combiner demand; untextured
+     * triangles can still sample with the zero coordinates from span setup. */
+    if (((has_texture || has_shade) &&
+         (primitive->color.needs_texel0 || primitive->color.needs_texel1)) ||
+        (has_texture && primitive->color.needs_lod_fraction)) {
         plan->stages |= RDP_BLOCK_STAGE_TEXTURE;
         plan->sampler = primitive->texture.sampler_class == RDP_SAMPLER_RGBA16_BILERP
             ? RDP_BLOCK_SAMPLER_RGBA16_BILERP
