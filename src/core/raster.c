@@ -178,10 +178,17 @@ static bool triangle_span_for_y(const raster_triangle_setup *setup,
 {
     static const int sample_min[4] = { 0, 2, 0, 2 };
     static const int sample_max[4] = { 4, 6, 4, 6 };
-    const int scissor_y0 = state->scissor_y0 ? (int)state->scissor_y0 : 0;
-    const int scissor_y1 = state->scissor_y1 ? (int)state->scissor_y1 : 0x1000;
-    const int32_t scissor_x0 = state->scissor_x0 ? (int32_t)state->scissor_x0 << 14 : 0;
-    const int32_t scissor_x1 = state->scissor_x1 ? (int32_t)state->scissor_x1 << 14 : 0x04000000;
+    /* An empty scissor (any high edge <= its low edge) clips the whole primitive
+     * away. Never expand a zero high edge into a large default: that is the same
+     * hazard that let a degenerate FILL_RECT scribble over RDRAM. */
+    if (state->scissor_x1 <= state->scissor_x0 ||
+        state->scissor_y1 <= state->scissor_y0) {
+        return false;
+    }
+    const int scissor_y0 = (int)state->scissor_y0;
+    const int scissor_y1 = (int)state->scissor_y1;
+    const int32_t scissor_x0 = (int32_t)state->scissor_x0 << 14;
+    const int32_t scissor_x1 = (int32_t)state->scissor_x1 << 14;
     int min_edge = 0x3fffffff;
     int max_edge = -0x3fffffff;
     int full_x0 = -0x3fffffff;
@@ -254,10 +261,16 @@ static bool fill_triangle_span_for_y(const raster_triangle_setup *setup,
         span->x0 = fixed_ceil_div(xl, 0x10000);
         span->x1 = fixed_ceil_div(xh, 0x10000) - 1;
     }
-    const int min_x = state->scissor_x0 ? (int)((state->scissor_x0 + 3u) >> 2) : 0;
-    const int max_x = state->scissor_x1 ? (int)((state->scissor_x1 - 1u) >> 2) : 0x3ff;
-    const int min_y = state->scissor_y0 ? (int)((state->scissor_y0 + 3u) >> 2) : 0;
-    const int max_y = state->scissor_y1 ? (int)((state->scissor_y1 - 1u) >> 2) : 0x3ff;
+    /* Empty scissor clips the fill triangle away; see triangle_span_for_y. Do
+     * not expand a zero high edge into a full-screen default. */
+    if (state->scissor_x1 <= state->scissor_x0 ||
+        state->scissor_y1 <= state->scissor_y0) {
+        return false;
+    }
+    const int min_x = (int)((state->scissor_x0 + 3u) >> 2);
+    const int max_x = (int)((state->scissor_x1 - 1u) >> 2);
+    const int min_y = (int)((state->scissor_y0 + 3u) >> 2);
+    const int max_y = (int)((state->scissor_y1 - 1u) >> 2);
     if (y < min_y || y > max_y) return false;
     if (span->x0 < min_x) span->x0 = min_x;
     if (span->x1 > max_x) span->x1 = max_x;
@@ -298,16 +311,25 @@ typedef struct raster_rect {
 
 static bool clip_rect_to_scissor(raster_rect *rect, const rdp_state *state)
 {
+    /* Scissor high edges are literal 10.2 fixed-point values. A high edge of 0
+     * (or any x1 <= x0 / y1 <= y0) describes an EMPTY clip region, not an
+     * unbounded one. Treating 0 as "no limit" let a degenerate FILL_RECT with a
+     * huge rectangle write across all of RDRAM -- including the CPU exception
+     * vectors -- crashing games that legitimately scissor to nothing. */
+    if (state->scissor_x1 <= state->scissor_x0 ||
+        state->scissor_y1 <= state->scissor_y0) {
+        return false;
+    }
     if (state->scissor_x0 > rect->x0 << 2) {
         rect->x0 = (state->scissor_x0 + 3u) >> 2;
     }
     if (state->scissor_y0 > rect->y0 << 2) {
         rect->y0 = (state->scissor_y0 + 3u) >> 2;
     }
-    if (state->scissor_x1 && state->scissor_x1 <= rect->x1 << 2) {
+    if (state->scissor_x1 <= rect->x1 << 2) {
         rect->x1 = (state->scissor_x1 - 1u) >> 2;
     }
-    if (state->scissor_y1 && state->scissor_y1 <= rect->y1 << 2) {
+    if (state->scissor_y1 <= rect->y1 << 2) {
         rect->y1 = (state->scissor_y1 - 1u) >> 2;
     }
 
